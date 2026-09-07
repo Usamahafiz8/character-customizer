@@ -1,0 +1,5 @@
+{
+  "devDependencies": {
+    "@cocos/fbx2gltf": "^1.0.8"
+  }
+}
