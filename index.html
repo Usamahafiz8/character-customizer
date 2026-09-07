@@ -1254,10 +1254,14 @@
   // only needs enough detail to judge skin/hair color and hair shape.
   // Passes the canvas too (not just the dataURL) so the caller can also run
   // real pixel measurement on it — see extractSkinToneFromCanvas below.
+  // 512 (the original value) was noticeably soft for judging hairstyle
+  // texture/shape on a real phone selfie once actually compared side by
+  // side against the source photo at 768 — bumped up; still a tiny JPEG
+  // (a few hundred KB) so upload time and OpenAI cost stay negligible.
   function fileToResizedDataUrl(source, cb) {
     var img = new Image();
     img.onload = function () {
-      var maxDim = 512;
+      var maxDim = 768;
       var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
       var c = document.createElement("canvas");
       c.width = Math.round(img.width * scale);

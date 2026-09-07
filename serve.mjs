@@ -42,8 +42,16 @@ const TYPES = {
   ".jpg": "image/jpeg"
 };
 
+// Kept in exact sync with HAIR_STYLES below and with HAIR_STYLE_FILES /
+// sel-hairstyle in index.html — a style that exists in the app but isn't
+// listed here can never be picked by the model (it has no way to know it
+// exists), and one listed here but missing from HAIR_STYLES gets silently
+// downgraded to "default" by the sanitizer even if the model does pick it.
+// ("dreads" was added to the app as its own real hairstyle option, but this
+// list — and the sanitizer's whitelist further down — never got updated to
+// match, so a real dreadlocked photo could never actually be matched to it.)
 const HAIR_STYLE_DESCRIPTIONS = `
-- "default": keep the body's own default short hair as-is. Use this whenever the photo's hairstyle doesn't clearly match one of the options below, or for any long/updo/braided/curly-voluminous style none of these cover (this app currently only has short-to-medium men's-style cuts available as real 3D swaps).
+- "default": keep the body's own default short hair as-is. Use this whenever the photo's hairstyle doesn't clearly match one of the options below, or for any long/updo/braided/curly-voluminous style none of these cover (aside from "dreads" below, this app only has short-to-medium men's-style cuts available as real 3D swaps).
 - "casual": short, slightly tousled/messy hair with natural volume on top.
 - "casual2": short hair, side-swept with a defined side part.
 - "adventurer": short-to-medium wavy/textured hair.
@@ -51,6 +59,7 @@ const HAIR_STYLE_DESCRIPTIONS = `
 - "suit": short, neat, combed-back professional hair.
 - "king": short hair that is grey/silver/white in color — pick this whenever the person's real hair color is grey/white/silver, regardless of its shape.
 - "punk": shaved sides with a raised mohawk strip down the center — ONLY pick this if the photo clearly shows an actual mohawk.
+- "dreads": gathered dreadlocks/twists pulled back into a bun or ponytail — pick this for dreadlocked, locced, or twisted hair gathered at the back/crown, even if the exact length or bun position doesn't match precisely.
 `.trim();
 
 async function analyzePhoto(req, res) {
@@ -104,22 +113,23 @@ HAIR COLOR: Sample from the hair that's clearly visible (avoid shadows). Provide
 HAIRSTYLE: Pick the closest match from these options:
 ${HAIR_STYLE_DESCRIPTIONS}
 
-BODY & FACE WEIGHT:
-- bodyWeight: 0.75=slim/athletic, 1.0=average, 1.4=heavier build. Observe shoulders, chest, overall frame.
-- faceWeight: 0.8=narrow/angular face, 1.0=average, 1.3=rounder/fuller face. Look at cheek prominence, jaw width.
+BODY & FACE WEIGHT: most photos through this feature are a tight face/webcam selfie with the shoulders partly or fully out of frame — don't default to 1.0 (average) just because the torso isn't visible; commit to your best real estimate from whatever IS visible, the same way you'd size someone up from a face photo in person.
+- faceWeight (use this first, it's usually visible even in a tight closeup): 0.8-0.85 = visibly narrow/angular — defined jawline and cheekbones, some hollow under the cheek. 1.0 = average fullness. 1.15-1.3 = visibly round/full — soft jawline, filled-out cheeks, any visible neck/chin fullness. Actually commit to a value on this scale based on what you see; only use exactly 1.0 when the face genuinely looks average, not as a default for "not sure."
+- bodyWeight: 0.75=slim/athletic, 1.0=average, 1.4=heavier build. If shoulders/chest/neck ARE visible, judge directly from them. If the photo is cropped tight to just the face, a fuller face/neck (faceWeight above 1.1) usually goes with a heavier overall build and a narrow face (faceWeight below 0.9) with a slimmer one — use that correlation rather than falling back to 1.0 by default, but don't force bodyWeight and faceWeight to always move in lockstep either if the visible evidence disagrees.
 
 EDGE CASES:
 - If face is partially obscured, estimate from visible features
 - If wearing hat/hair covered, still pick the closest hairstyle based on hair visible
 - If no hair visible, use "default"
-- If person is bald/shaved head, use "default"
+- If person is bald/shaved head (no mohawk strip), use "default"
 
-Respond with ONLY valid JSON, no markdown, no explanation:
+Respond with ONLY valid JSON, no markdown, no explanation. Fill "observations" FIRST, in plain text, describing exactly what you actually see (hair length/texture/color, skin tone, build, any obscuring factors like hats or shadows) before committing to the structured fields below — ground every field that follows in what you just wrote, don't guess independently of it:
 {
+  "observations": "one or two plain-text sentences describing the real visible hair, skin, and build details this photo shows",
   "genderGuess": "male" or "female",
   "skinToneHex": "#rrggbb (actual color from face in photo)",
   "hairColorHex": "#rrggbb (actual color from hair in photo)",
-  "hairStyle": "default, casual, casual2, adventurer, beach, suit, king, or punk",
+  "hairStyle": "default, casual, casual2, adventurer, beach, suit, king, punk, or dreads",
   "bodyWeight": 0.75 to 1.4,
   "faceWeight": 0.8 to 1.3
 }`;
@@ -134,7 +144,7 @@ Respond with ONLY valid JSON, no markdown, no explanation:
         body: JSON.stringify({
           model: "gpt-4o-mini",
           response_format: { type: "json_object" },
-          max_tokens: 400,
+          max_tokens: 550, // bumped from 400 to leave room for the new "observations" field ahead of the structured ones
           messages: [
             {
               role: "user",
@@ -166,7 +176,7 @@ Respond with ONLY valid JSON, no markdown, no explanation:
       // model output is untrusted input, not something to hand straight to
       // hexToRgb or a style lookup that assumes a valid enum value.
       const HEX_RE = /^#[0-9a-fA-F]{6}$/;
-      const HAIR_STYLES = ["default", "casual", "casual2", "adventurer", "beach", "suit", "king", "punk"];
+      const HAIR_STYLES = ["default", "casual", "casual2", "adventurer", "beach", "suit", "king", "punk", "dreads"];
       const clamp = (v, lo, hi, fallback) => (typeof v === "number" && isFinite(v)) ? Math.min(Math.max(v, lo), hi) : fallback;
       const safe = {
         genderGuess: parsed.genderGuess === "female" ? "female" : "male",
