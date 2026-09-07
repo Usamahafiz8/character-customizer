@@ -161,9 +161,13 @@ http.createServer((req, res) => {
     return;
   }
 
-  let filePath = path.join(ROOT, decodeURIComponent(req.url.split("?")[0]));
-  if (filePath.endsWith("/")) filePath = path.join(filePath, "index.html");
-  if (!filePath.startsWith(ROOT)) { res.writeHead(403); res.end("forbidden"); return; }
+  let urlPath = decodeURIComponent(req.url.split("?")[0]);
+  if (urlPath === "/") urlPath = "/index.html";
+  let filePath = path.join(ROOT, urlPath);
+  filePath = path.normalize(filePath);
+
+  const normalizedRoot = path.normalize(ROOT);
+  if (!filePath.startsWith(normalizedRoot)) { res.writeHead(403); res.end("forbidden"); return; }
 
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); res.end("not found"); return; }

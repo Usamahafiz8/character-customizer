@@ -237,18 +237,22 @@
   README. Verifying that fix is separately blocked right now by a bug in the
   Animation feature's own "T-pose (static)" not reproducing the model's real
   bind pose. Re-enable this <div> once both are sorted. -->
-  <div class="row" style="display:none"><span>Outfit</span>
-    <select id="sel-outfit">
-      <option value="none">None (base body)</option>
-      <option value="casual">Casual</option>
-    </select>
-  </div>
-
   <div class="row"><span>Animation</span>
     <select id="sel-animation">
       <option value="tpose">T-pose (static)</option>
       <option value="idle" selected>Idle</option>
       <option value="dance1">Dance 1</option>
+    </select>
+  </div>
+
+  <div class="divider"></div>
+
+  <div class="row"><span>Outfit</span>
+    <select id="sel-outfit">
+      <option value="default">Default</option>
+      <option value="adventurer">Adventurer</option>
+      <option value="casual">Casual</option>
+      <option value="beach">Beach</option>
     </select>
   </div>
 
@@ -1622,11 +1626,6 @@
     rebuildHairAccessory(currentGender);
   });
 
-  document.getElementById("sel-outfit").addEventListener("change", function (e) {
-    currentOutfit = e.target.value;
-    rebuildOutfit(currentGender);
-  });
-
   document.getElementById("sel-animation").addEventListener("change", function (e) {
     currentAnimation = e.target.value;
     applyAnimation(currentGender, currentAnimation);
@@ -1645,6 +1644,69 @@
   document.getElementById("rng-faceweight").addEventListener("input", function (e) {
     currentFaceWeight = parseFloat(e.target.value);
     applyFaceWeight(currentGender, currentFaceWeight);
+  });
+
+  var OUTFIT_MODELS = {
+    adventurer: "models/GLB/Adventurer.glb",
+    casual: "models/GLB/Casual_2.glb",
+    beach: "models/GLB/Beach.glb"
+  };
+
+  var currentOutfit = "default";
+  var outfitOverlay = null;
+
+  document.getElementById("sel-outfit").addEventListener("change", function (e) {
+    currentOutfit = e.target.value;
+
+    // Remove previous outfit
+    if (outfitOverlay) {
+      scene.remove(outfitOverlay);
+      outfitOverlay = null;
+    }
+
+    if (currentOutfit === "default") {
+      loadingEl.textContent = "Outfit removed";
+      loadingEl.classList.remove("hidden");
+      setTimeout(function () { loadingEl.classList.add("hidden"); }, 500);
+      return;
+    }
+
+    var outfitPath = OUTFIT_MODELS[currentOutfit];
+    if (!outfitPath || !currentModel) return;
+
+    loadingEl.classList.remove("hidden");
+    loadingEl.textContent = "Loading outfit...";
+
+    loader.load(
+      outfitPath,
+      function (gltf) {
+        var outfitModel = gltf.scene;
+
+        outfitModel.traverse(function (node) {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+
+            // Hide head - keep original character's head and hair
+            if (node.name.toLowerCase().includes("head") ||
+                node.name.toLowerCase().includes("face")) {
+              node.visible = false;
+            }
+          }
+        });
+
+        outfitOverlay = outfitModel;
+        outfitModel.scale.copy(currentModel.scale);
+        scene.add(outfitModel);
+        loadingEl.classList.add("hidden");
+      },
+      undefined,
+      function (err) {
+        console.error("Outfit error:", err);
+        loadingEl.textContent = "Failed to load outfit";
+        setTimeout(function () { loadingEl.classList.add("hidden"); }, 2000);
+      }
+    );
   });
 
   var autorotateBtn = document.getElementById("autorotate");
