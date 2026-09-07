@@ -229,15 +229,10 @@
   </div>
   <div class="row"><span>Hair color</span><input type="color" id="col-hair" value="#3b2a1e"></div>
   <div class="swatches" id="hair-swatches"></div>
+  <div class="row"><span>Hair height</span><input type="range" id="rng-hair-y" min="-0.06" max="0.06" step="0.005" value="0"></div>
+  <div class="row"><span>Hair size</span><input type="range" id="rng-hair-size" min="0.7" max="1.3" step="0.01" value="1"></div>
+  <div class="row"><span>Hair tilt</span><input type="range" id="rng-hair-tilt" min="-0.3" max="0.3" step="0.01" value="0"></div>
 
-  <!-- Outfit UI hidden for now, not removed: the underlying pipeline (real
-  Quaternius meshes, real bone-name weight remap onto this rig, real
-  SkinnedMesh) is built and verified correct, but the garment geometry itself
-  still needs full FK pose-retargeting (Quaternius ships arms-out T-pose,
-  this rig's rest pose differs) before it looks right on the body — see
-  README. Verifying that fix is separately blocked right now by a bug in the
-  Animation feature's own "T-pose (static)" not reproducing the model's real
-  bind pose. Re-enable this <div> once both are sorted. -->
   <div class="row"><span>Animation</span>
     <select id="sel-animation">
       <option value="tpose">T-pose (static)</option>
@@ -255,24 +250,13 @@
 
   <div class="divider"></div>
 
-  <div class="row"><span>Outfit</span>
-    <select id="sel-outfit">
-      <option value="default">Default</option>
-      <option value="adventurer">Adventurer</option>
-      <option value="casual">Casual</option>
-      <option value="beach">Beach</option>
-    </select>
-  </div>
-
-  <div class="divider"></div>
-
   <div class="row"><span>Height</span><input type="range" id="rng-height" min="0.85" max="1.15" step="0.01" value="1"></div>
   <div class="row"><span>Body weight</span><input type="range" id="rng-bodyweight" min="0.75" max="1.4" step="0.01" value="1"></div>
   <div class="row"><span>Face weight</span><input type="range" id="rng-faceweight" min="0.8" max="1.3" step="0.01" value="1"></div>
 
   <div class="divider"></div>
   <button id="autorotate">Auto-rotate: off</button>
-  <div class="hint">Drag to orbit &middot; scroll to zoom<br>Skin tone and hair color are real per-pixel masks on the model's own texture. Hair style and Outfit both swap in real meshes (from Quaternius's CC0 Ultimate Modular Characters pack), refit onto this model's head/hips bones (see README).</div>
+  <div class="hint">Drag to orbit &middot; scroll to zoom<br>Skin tone and hair color are real per-pixel masks on the model's own texture. Hair style swaps in a real mesh (from Quaternius's CC0 Ultimate Modular Characters pack / OpenGameArt), refit onto this model's head bone (see README).</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
@@ -417,150 +401,65 @@
     dreads: { offsetY: 0, radial: 1 }
   };
   var HAIR_FIT_DEFAULT = { offsetY: -0.02, radial: 0.75 };
+
+  // Manual fine-tune layered ON TOP of each style's own baked HAIR_FIT
+  // (offsetY/radial) rather than replacing it — the per-style numbers above
+  // already got each of the 8 styles close by real screenshot measurement;
+  // these three deltas just let the user nudge that starting point instead
+  // of forcing them to fight a single one-size-fits-all default. Reset to
+  // neutral (0/1/0) whenever the style changes (see rebuildHairAccessory) so
+  // switching styles always starts from that style's own verified fit, not
+  // whatever the previous style happened to be tuned to.
+  var currentHairOffsetDelta = 0; // meters, added to fit.offsetY
+  var currentHairSizeDelta = 1;   // multiplier, applied on top of fit.radial (X/Z) and to Y too
+  var currentHairTiltDelta = 0;   // radians, forward/back tilt
+
+  function applyHairFitToGroup(group) {
+    var style = group.userData.hairStyle;
+    var fit = HAIR_FIT[style] || HAIR_FIT_DEFAULT;
+    group.position.y = fit.offsetY + currentHairOffsetDelta;
+    group.rotation.x = currentHairTiltDelta;
+    var mesh = group.children[0];
+    mesh.scale.set(fit.radial * currentHairSizeDelta, currentHairSizeDelta, fit.radial * currentHairSizeDelta);
+  }
+
+  // Called by the fine-tune sliders: re-applies the current deltas to
+  // whatever hair accessory is already in the scene, without refetching
+  // geometry/rebuilding materials — just a transform update, so it tracks
+  // the slider drag in real time.
+  function applyHairFitAdjustment(gender) {
+    var entry = cache[gender];
+    if (!entry || !entry.headBone) return;
+    var group = entry.headBone.getObjectByName("hairAccessory");
+    if (!group) return;
+    applyHairFitToGroup(group);
+  }
+
+  // Called only where the STYLE (or gender/model) actually changes — not on
+  // every rebuildHairAccessory (that also fires on a plain color change,
+  // where wiping the user's own fine-tuning would be a regression, not a
+  // reset). Snaps both the state and the visible slider positions back to
+  // neutral so a freshly-picked style always starts from its own verified
+  // HAIR_FIT baseline.
+  function resetHairFitDeltas() {
+    currentHairOffsetDelta = 0;
+    currentHairSizeDelta = 1;
+    currentHairTiltDelta = 0;
+    var rngY = document.getElementById("rng-hair-y"); if (rngY) rngY.value = 0;
+    var rngSize = document.getElementById("rng-hair-size"); if (rngSize) rngSize.value = 1;
+    var rngTilt = document.getElementById("rng-hair-tilt"); if (rngTilt) rngTilt.value = 0;
+  }
+
   function buildHairCap(style, hexInt, cb) {
     loadHairGeometry(style, function (geo) {
       loadHairTexture(style, function (texture) {
         var group = new THREE.Group();
         group.name = "hairAccessory";
+        group.userData.hairStyle = style;
         var mesh = new THREE.Mesh(geo, buildHairAccessoryMaterial(hexInt, texture));
         group.add(mesh);
-        var fit = HAIR_FIT[style] || HAIR_FIT_DEFAULT;
-        group.position.y = fit.offsetY;
-        mesh.scale.set(fit.radial, 1, fit.radial);
+        applyHairFitToGroup(group);
         cb(group);
-      });
-    });
-  }
-
-  // ---------- outfit geometry: real assets, real skinning ----------
-  // Real clothing meshes from the same Quaternius CC0 pack family as the
-  // hairstyles (quaternius.com/packs/ultimatemodularcharacters.html and
-  // .../ultimatemodularwomen.html — "Ultimate Modular Males/Females"), NOT
-  // procedural shapes. That pack ships each outfit pre-split per body region
-  // ("Separate Skeletal Meshes and Animations/<Outfit>/<Outfit>_Body|Legs|
-  // Feet|Head.fbx") with real UVs and per-region materials, so no mask-based
-  // extraction was needed — just picking the non-"Skin" material out of each
-  // region (see models/outfits/*.bin, built by a one-off Python script, not
-  // checked into this app).
-  //
-  // First version (rigid, non-skinned, glued to the Hips bone like the hair
-  // cap) looked completely broken — screenshot showed a huge flung-out wing
-  // of geometry — even in this rig's own "T-pose (static)". Root cause,
-  // confirmed by comparing bone rotations, not assumed: this RPM rig's rest
-  // pose has the arms mostly DOWN at the sides, while Quaternius's own
-  // source FBX was authored in a classic arms-out horizontal T-pose. A rigid
-  // mesh can only ever show up in the pose it was authored in, so sleeves
-  // and pant legs — anything crossing a shoulder/hip/knee joint — showed up
-  // at completely the wrong angle. Hair got away with rigid attachment only
-  // because a head cap doesn't cross a joint.
-  //
-  // Real fix: proper skinning. Each outfit vertex was baked into this rig's
-  // own model-space (assimp -ptv bind-pose world coords, rebased off the
-  // pack's own Hips joint onto measured this-project Hips position, rescaled
-  // by total mesh height), then given its OWN skinIndex/skinWeight by
-  // nearest-neighbor lookup against the RPM body mesh's real skin data (read
-  // directly from Masculine.glb/Feminine.glb's JOINTS_0/WEIGHTS_0 — the
-  // exact same joint index numbering Three.js's GLTFLoader uses for
-  // `skeleton.bones`, so no reindexing needed): for each outfit vertex, blend
-  // the 4 nearest body vertices' bone weights by inverse distance, then keep
-  // that vertex's own top 4 bones renormalized to sum to 1. Standard
-  // nearest-neighbor weight transfer for fitting a new mesh onto a skeleton
-  // it wasn't authored for. Loaded below as a real THREE.SkinnedMesh sharing
-  // this avatar's own THREE.Skeleton (see rebuildOutfit) — it now deforms
-  // with whatever pose the body is actually in, T-pose or animated.
-  var OUTFIT_PIECES = {
-    casual: {
-      male: [
-        { file: "models/outfits/casual_male_top.bin", color: [0.0504080243, 0.0305635016, 0.0836931989] },    // hoodie ("Purple" material)
-        { file: "models/outfits/casual_male_bottom.bin", color: [0.0264838226, 0.0397652611, 0.0504080243] }, // jeans ("LightBlue" material)
-        { file: "models/outfits/casual_male_shoes.bin", color: [0.0504080243, 0.0305635016, 0.0836931989] }   // shoes (combined "White"+"Purple" sub-meshes, shown in the accent "Purple")
-      ],
-      female: [
-        { file: "models/outfits/casual_female_top.bin", color: [0.366017848, 0.366017848, 0.366017848] },     // top ("White" material)
-        { file: "models/outfits/casual_female_bottom.bin", color: [0.273903847, 0.0971288234, 0.0318684056] },// pants ("Orange" material)
-        { file: "models/outfits/casual_female_shoes.bin", color: [0.0397652611, 0.0397652611, 0.0397652611] } // shoes ("Grey" material)
-      ]
-    }
-  };
-  var outfitGeometryCache = {}; // file path -> THREE.BufferGeometry (fetched once, reused)
-
-  function loadOutfitPieceGeometry(file, cb) {
-    if (outfitGeometryCache[file]) { cb(outfitGeometryCache[file]); return; }
-    fetch(file).then(function (res) { return res.arrayBuffer(); }).then(function (buf) {
-      var dv = new DataView(buf);
-      var vertCount = dv.getUint32(0, true);
-      var idxCount = dv.getUint32(4, true);
-      var off = 8;
-      var positions = new Float32Array(buf, off, vertCount * 3); off += vertCount * 3 * 4;
-      var normals = new Float32Array(buf, off, vertCount * 3); off += vertCount * 3 * 4;
-      var uvs = new Float32Array(buf, off, vertCount * 2); off += vertCount * 2 * 4;
-      // skinIndex is stored as uint16 (matches skeleton.bones indices, which
-      // for this rig go past 255 — a uint8 would silently truncate them).
-      var skinIndexRaw = new Uint16Array(buf, off, vertCount * 4); off += vertCount * 4 * 2;
-      var skinWeight = new Float32Array(buf, off, vertCount * 4); off += vertCount * 4 * 4;
-      var indices = new Uint32Array(buf, off, idxCount);
-
-      var geo = new THREE.BufferGeometry();
-      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-      geo.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
-      geo.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
-      geo.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(skinIndexRaw, 4));
-      geo.setAttribute("skinWeight", new THREE.BufferAttribute(skinWeight, 4));
-      geo.setIndex(new THREE.BufferAttribute(indices, 1));
-      outfitGeometryCache[file] = geo;
-      cb(geo);
-    }).catch(function (err) {
-      console.error("outfit piece failed to load", file, err);
-    });
-  }
-
-  function buildOutfitPieceMaterial(colorArr) {
-    // MeshBasicMaterial (unlit) for the same reason as the hair accessory
-    // (buildHairAccessoryMaterial above): the avatar's own baked material is
-    // KHR_materials_unlit, and a lit material rendered grey/washed-out next
-    // to it under this scene's lights. MeshBasicMaterial does support
-    // skinning in three r128 (skinning is a vertex-shader feature, orthogonal
-    // to whether the material is lit) — no special material flag needed.
-    //
-    // NO convertSRGBToLinear here, unlike the hair accessory's hex color —
-    // that call exists specifically because a color-picker hex (like
-    // "#3b2a1e") is a value a human picked/perceives in sRGB space. These
-    // colors instead come straight from each FBX's own Kd (diffuse) value,
-    // which Blender/FBX already store and export as linear — feeding them
-    // through convertSRGBToLinear a second time would darken them further
-    // and no longer match the source asset's real appearance.
-    return new THREE.MeshBasicMaterial({
-      color: new THREE.Color(colorArr[0], colorArr[1], colorArr[2]),
-      side: THREE.DoubleSide,
-      skinning: true
-    });
-  }
-
-  // Builds one outfit as real THREE.SkinnedMesh instances sharing `skeleton`
-  // (this avatar's own live THREE.Skeleton — NOT a copy) and `bindMatrix`
-  // (this avatar's own body mesh's bind matrix, which this project's rig has
-  // as identity, but reusing it rather than assuming that stays reusing the
-  // exact same rest-pose reference frame the skin weights were transferred
-  // against). Every outfit vertex already sits in that same model-space
-  // (see the big comment above), so this "just works" the same way the
-  // body's own SkinnedMesh does — no bone-parenting needed, unlike hair.
-  function buildOutfit(styleKey, gender, skeleton, bindMatrix, cb) {
-    var pieces = OUTFIT_PIECES[styleKey] && OUTFIT_PIECES[styleKey][gender];
-    if (!pieces) { cb(null); return; }
-    var group = new THREE.Group();
-    group.name = "outfitAccessory";
-    var remaining = pieces.length;
-    pieces.forEach(function (piece) {
-      loadOutfitPieceGeometry(piece.file, function (geo) {
-        var mesh = new THREE.SkinnedMesh(geo, buildOutfitPieceMaterial(piece.color));
-        mesh.bind(skeleton, bindMatrix);
-        // Bounding volumes are computed from bind-pose geometry alone, not
-        // the live animated pose — a dance clip's arm swing can carry
-        // vertices well outside that box and pop the mesh from view.
-        mesh.frustumCulled = false;
-        group.add(mesh);
-        remaining--;
-        if (remaining === 0) cb(group);
       });
     });
   }
@@ -684,7 +583,6 @@
   var currentGender = "male";
   var currentHairHex = "#3b2a1e";
   var currentHairStyle = "default";
-  var currentOutfit = "none";
   var currentSkinHex = null; // null = leave the model's own natural skin tone alone until the user actually picks one
   var currentHeight = 1;
   var currentBodyWeight = 1;
@@ -697,9 +595,9 @@
   // from avatar-anim-v2/models/rpm/clips, which already established (see
   // that project's own notes) that F_-prefixed clips retarget correctly
   // onto either body: one shared skeleton, so the clip's own gender prefix
-  // doesn't matter. Reused rather than rebuilt, same reasoning as hair/
-  // outfit: real assets already sitting in a sibling project beat building
-  // a pose system from scratch.
+  // doesn't matter. Reused rather than rebuilt, same reasoning as hair:
+  // real assets already sitting in a sibling project beat building a pose
+  // system from scratch.
   var ANIMATION_CLIPS = {
     idle: "models/anim/idle.glb",
     dance1: "models/anim/dance1.glb",
@@ -782,39 +680,6 @@
       if (currentGender !== gender || currentHairStyle !== requestedStyle) return;
       removeHairAccessory(hb); // in case a stale one slipped in meanwhile
       hb.add(group);
-    });
-  }
-
-  function removeOutfit(root) {
-    var old = root.getObjectByName("outfitAccessory");
-    if (!old) return;
-    root.remove(old);
-    old.traverse(function (n) {
-      // geometry is shared/cached (outfitGeometryCache) across every
-      // instance of a style — dispose only the per-instance material, same
-      // rule as removeHairAccessory above.
-      if (n.isMesh) n.material.dispose();
-    });
-  }
-
-  // Unlike hair (parented onto the Head BONE, so it inherits that bone's own
-  // transform), the outfit group is added straight onto the model's `root`
-  // Object3D — each piece is a real THREE.SkinnedMesh bound to this avatar's
-  // own skeleton, so IT already tracks every bone's pose; parenting it onto
-  // any one bone on top of that would double-apply that bone's transform.
-  function rebuildOutfit(gender) {
-    var entry = cache[gender];
-    if (!entry || !entry.skeleton) return;
-    removeOutfit(entry.root);
-    if (currentOutfit === "none") return;
-
-    var requestedOutfit = currentOutfit;
-    buildOutfit(requestedOutfit, gender, entry.skeleton, entry.bindMatrix, function (group) {
-      // same async-race guard as rebuildHairAccessory: bail if the user
-      // switched gender/outfit again before this particular fetch resolved.
-      if (currentGender !== gender || currentOutfit !== requestedOutfit || !group) return;
-      removeOutfit(entry.root);
-      entry.root.add(group);
     });
   }
 
@@ -1298,8 +1163,8 @@
         computeFaceWeightGroup(gender);
         applyBodyShape(gender, currentBodyWeight, currentFaceWeight);
         placeModel(root);
+        resetHairFitDeltas();
         rebuildHairAccessory(gender);
-        rebuildOutfit(gender);
         applyAnimation(gender, currentAnimation);
 
         // prep source + mask pixel data in the background, then apply current hair color
@@ -1620,9 +1485,9 @@
 
   // Applies one AI result to every control it covers, reusing the exact
   // same functions the manual controls call — never duplicating that logic.
-  // Height/outfit/animation aren't touched: there's no reliable way to
-  // judge a person's real height from a photo with no size reference, and
-  // outfit/animation aren't really "what you look like" traits to match.
+  // Height/animation aren't touched: there's no reliable way to judge a
+  // person's real height from a photo with no size reference, and animation
+  // isn't really a "what you look like" trait to match.
   function applyPhotoResult(result) {
     // A real measurement from this exact photo's own pixels beats the AI's
     // text description of a color every time it's available — only fall
@@ -1646,6 +1511,7 @@
     // already loaded/cached, setGender's early-return means nothing else
     // would apply this new state, so these do the real work.
     refreshBakedHair(result.genderGuess);
+    resetHairFitDeltas();
     rebuildHairAccessory(result.genderGuess);
     applyBodyShape(result.genderGuess, result.bodyWeight, result.faceWeight);
   }
@@ -1733,7 +1599,25 @@
   document.getElementById("sel-hairstyle").addEventListener("change", function (e) {
     currentHairStyle = e.target.value;
     refreshBakedHair(currentGender);
+    resetHairFitDeltas();
     rebuildHairAccessory(currentGender);
+  });
+
+  // Manual fine-tune sliders — layered on top of each style's own baked
+  // HAIR_FIT (see applyHairFitToGroup), not a replacement for it. Updates
+  // the already-built accessory's transform directly (no reload), so it
+  // tracks the drag live.
+  document.getElementById("rng-hair-y").addEventListener("input", function (e) {
+    currentHairOffsetDelta = parseFloat(e.target.value);
+    applyHairFitAdjustment(currentGender);
+  });
+  document.getElementById("rng-hair-size").addEventListener("input", function (e) {
+    currentHairSizeDelta = parseFloat(e.target.value);
+    applyHairFitAdjustment(currentGender);
+  });
+  document.getElementById("rng-hair-tilt").addEventListener("input", function (e) {
+    currentHairTiltDelta = parseFloat(e.target.value);
+    applyHairFitAdjustment(currentGender);
   });
 
   document.getElementById("sel-animation").addEventListener("change", function (e) {
@@ -1754,69 +1638,6 @@
   document.getElementById("rng-faceweight").addEventListener("input", function (e) {
     currentFaceWeight = parseFloat(e.target.value);
     applyFaceWeight(currentGender, currentFaceWeight);
-  });
-
-  var OUTFIT_MODELS = {
-    adventurer: "models/GLB/Adventurer.glb",
-    casual: "models/GLB/Casual_2.glb",
-    beach: "models/GLB/Beach.glb"
-  };
-
-  var currentOutfit = "default";
-  var outfitOverlay = null;
-
-  document.getElementById("sel-outfit").addEventListener("change", function (e) {
-    currentOutfit = e.target.value;
-
-    // Remove previous outfit
-    if (outfitOverlay) {
-      scene.remove(outfitOverlay);
-      outfitOverlay = null;
-    }
-
-    if (currentOutfit === "default") {
-      loadingEl.textContent = "Outfit removed";
-      loadingEl.classList.remove("hidden");
-      setTimeout(function () { loadingEl.classList.add("hidden"); }, 500);
-      return;
-    }
-
-    var outfitPath = OUTFIT_MODELS[currentOutfit];
-    if (!outfitPath || !currentModel) return;
-
-    loadingEl.classList.remove("hidden");
-    loadingEl.textContent = "Loading outfit...";
-
-    loader.load(
-      outfitPath,
-      function (gltf) {
-        var outfitModel = gltf.scene;
-
-        outfitModel.traverse(function (node) {
-          if (node.isMesh) {
-            node.castShadow = true;
-            node.receiveShadow = true;
-
-            // Hide head - keep original character's head and hair
-            if (node.name.toLowerCase().includes("head") ||
-                node.name.toLowerCase().includes("face")) {
-              node.visible = false;
-            }
-          }
-        });
-
-        outfitOverlay = outfitModel;
-        outfitModel.scale.copy(currentModel.scale);
-        scene.add(outfitModel);
-        loadingEl.classList.add("hidden");
-      },
-      undefined,
-      function (err) {
-        console.error("Outfit error:", err);
-        loadingEl.textContent = "Failed to load outfit";
-        setTimeout(function () { loadingEl.classList.add("hidden"); }, 2000);
-      }
-    );
   });
 
   var autorotateBtn = document.getElementById("autorotate");
