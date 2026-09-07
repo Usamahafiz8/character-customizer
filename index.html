@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Character Customizer</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%; overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    background: #14161b;
+    color: #eee;
+  }
+  #viewport { position: fixed; inset: 0; }
+  canvas { display: block; touch-action: none; cursor: grab; }
+  canvas:active { cursor: grabbing; }
+
+  #panel {
+    position: fixed;
+    top: 16px; left: 16px;
+    width: 240px;
+    background: rgba(24, 26, 32, 0.88);
+    border: 1px solid rgba(255,255,255,0.08);
+    border-radius: 12px;
+    padding: 16px;
+    backdrop-filter: blur(6px);
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  #panel h1 {
+    font-size: 14px;
+    margin: 0 0 12px;
+    letter-spacing: 0.02em;
+    color: #fff;
+    font-weight: 600;
+  }
+  .gender-toggle {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .gender-toggle button {
+    flex: 1;
+    padding: 8px 0;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: transparent;
+    color: #ccc;
+    font-size: 13px;
+    cursor: pointer;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .gender-toggle button.active {
+    background: #4a7cff;
+    border-color: #4a7cff;
+    color: #fff;
+  }
+  .row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+    font-size: 12px;
+    color: #bbb;
+  }
+  .row input[type="color"] {
+    width: 34px; height: 24px;
+    border: 1px solid rgba(255,255,255,0.2);
+    border-radius: 6px;
+    background: none;
+    padding: 0;
+    cursor: pointer;
+  }
+  .row input[type="range"] {
+    width: 130px;
+  }
+  .swatches {
+    display: flex;
+    gap: 6px;
+    margin: -2px 0 12px;
+  }
+  .swatches button {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.25);
+    cursor: pointer;
+    padding: 0;
+  }
+  .row select {
+    width: 140px;
+    background: #1d2029;
+    color: #eee;
+    border: 1px solid rgba(255,255,255,0.15);
+    border-radius: 6px;
+    padding: 4px 6px;
+    font-size: 12px;
+  }
+  .divider {
+    height: 1px;
+    background: rgba(255,255,255,0.08);
+    margin: 12px 0;
+  }
+  .hint {
+    font-size: 11px;
+    color: #777;
+    line-height: 1.4;
+    margin-top: 4px;
+  }
+  #autorotate {
+    width: 100%;
+    margin-top: 4px;
+    padding: 7px 0;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: transparent;
+    color: #ccc;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  #autorotate.active {
+    background: rgba(74,124,255,0.2);
+    border-color: #4a7cff;
+    color: #fff;
+  }
+  #loading {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    color: #889;
+    pointer-events: none;
+  }
+  #loading.hidden { display: none; }
+</style>
+</head>
+<body>
+<div id="viewport"></div>
+<div id="loading">Loading character…</div>
+
+<div id="panel">
+  <h1>Character</h1>
+  <div class="gender-toggle">
+    <button id="btn-male" class="active">Male</button>
+    <button id="btn-female">Female</button>
+  </div>
+
+  <div class="row"><span>Hair style</span>
+    <select id="sel-hairstyle">
+      <option value="default">Default (baked)</option>
+      <option value="casual">Casual</option>
+      <option value="casual2">Casual 2</option>
+      <option value="adventurer">Adventurer</option>
+      <option value="beach">Beach</option>
+      <option value="suit">Suit</option>
+      <option value="king">King (grey)</option>
+      <option value="punk">Punk (mohawk)</option>
+    </select>
+  </div>
+  <div class="row"><span>Hair color</span><input type="color" id="col-hair" value="#3b2a1e"></div>
+  <div class="swatches" id="hair-swatches"></div>
+
+  <div class="divider"></div>
+
+  <div class="row"><span>Height</span><input type="range" id="rng-height" min="0.85" max="1.15" step="0.01" value="1"></div>
+
+  <div class="divider"></div>
+  <button id="autorotate">Auto-rotate: off</button>
+  <div class="hint">Drag to orbit &middot; scroll to zoom<br>Hair color is a real per-pixel mask on the model's own texture. Hair style swaps in a real hair mesh (from Quaternius's CC0 Ultimate Modular Characters pack), refit onto this model's head bone (see README).</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script>
+(function () {
+  "use strict";
+
+  var MODELS = {
+    male: "models/Masculine.glb",
+    female: "models/Feminine.glb"
+  };
+  var HAIR_MASKS = {
+    male: "models/masculine_hair_mask.png",
+    female: "models/feminine_hair_mask.png"
+  };
+  var HAIR_PRESETS = ["#0b0b0b", "#3b2a1e", "#6b4226", "#a85c2c", "#c99a4b", "#8a8a8a", "#e6e6e6", "#c0392b"];
+
+  // ---------- hairstyle geometry: real assets ----------
+  // Real hair meshes extracted from Quaternius's "Ultimate Modular
+  // Characters" pack (quaternius.com, CC0 — creativecommons.org/
+  // publicdomain/zero/1.0/), NOT procedural shapes. That pack ships whole
+  // pre-built heads (face+hair+eyes as one mesh, several materials); each
+  // style below is just that head's "Hair"/"Hair_White" material primitive,
+  // pulled out on its own. Original meshes are skinned to a ~196-unit-tall
+  // stylized rig in centimeters; extraction (see models/hair/*.bin, built by
+  // a one-off Python script, not checked into this app) baked each vertex to
+  // world space in bind pose, re-expressed it relative to that rig's own
+  // Head bone and normalized by that rig's own head size, then rescaled by
+  // this project's RPM rig's own head size (Head→HeadTop_End, measured =
+  // 0.229m) — so the geometry below is already in this rig's meters,
+  // ready to parent directly onto ITS Head bone with no further guessing.
+  var HAIR_STYLE_FILES = {
+    casual: "models/hair/casual.bin",
+    casual2: "models/hair/casual2.bin",
+    adventurer: "models/hair/adventurer.bin",
+    beach: "models/hair/beach.bin",
+    suit: "models/hair/suit.bin",
+    king: "models/hair/king.bin",
+    punk: "models/hair/punk.bin"
+  };
+  var hairGeometryCache = {}; // style -> THREE.BufferGeometry (fetched once, reused)
+
+  function loadHairGeometry(style, cb) {
+    if (hairGeometryCache[style]) { cb(hairGeometryCache[style]); return; }
+    fetch(HAIR_STYLE_FILES[style]).then(function (res) { return res.arrayBuffer(); }).then(function (buf) {
+      var dv = new DataView(buf);
+      var vertCount = dv.getUint32(0, true);
+      var idxCount = dv.getUint32(4, true);
+      var off = 8;
+      var positions = new Float32Array(buf, off, vertCount * 3); off += vertCount * 3 * 4;
+      var normals = new Float32Array(buf, off, vertCount * 3); off += vertCount * 3 * 4;
+      var uvs = new Float32Array(buf, off, vertCount * 2); off += vertCount * 2 * 4;
+      var indices = new Uint32Array(buf, off, idxCount);
+
+      var geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+      geo.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+      geo.setIndex(new THREE.BufferAttribute(indices, 1));
+      hairGeometryCache[style] = geo;
+      cb(geo);
+    });
+  }
+
+  function buildHairAccessoryMaterial(hexInt) {
+    // MeshBasicMaterial (unlit), not MeshStandardMaterial: the avatar's own
+    // baked material uses KHR_materials_unlit (flat color, ignores scene
+    // lighting entirely). A lit PBR material on the accessory rendered grey/
+    // washed-out next to it under this scene's lights — confirmed by
+    // sampling rendered pixels, not assumed. Matching unlit keeps the
+    // accessory's color exactly what was picked, like the rest of the model.
+    // convertSRGBToLinear compensates for renderer.outputEncoding re-encoding
+    // the framebuffer on output (a texture has its own .encoding to offset
+    // that; a plain hex Color doesn't, so it was rendering lighter than
+    // picked — confirmed by sampling, not assumed) — see README.
+    return new THREE.MeshBasicMaterial({
+      color: new THREE.Color(hexInt).convertSRGBToLinear(),
+      side: THREE.DoubleSide
+    });
+  }
+
+  // The extraction math (README) places hair by measured head-bone
+  // geometry, but a zoomed screenshot (not assumption) showed real gaps:
+  // this pack's hair is built from ~700+ small disconnected "hair card"
+  // pieces (a normal stylized-hair technique), individually fit to sit
+  // flush against QUATERNIUS's own head. A uniform scale-up was tried first
+  // (up to 1.4x) and did NOT close the gaps — scaling about the head-bone
+  // origin grows the whole cap, including its distance from the surface, so
+  // the gap just grows with it. What actually worked, confirmed by
+  // screenshot: pulling the cards radially inward (X/Z only, toward the
+  // head's own vertical axis — NOT a uniform 3-axis scale) so they hug this
+  // rig's slightly different head contour, plus a small downward nudge.
+  var HAIR_FIT_OFFSET_Y = -0.02;
+  var HAIR_FIT_RADIAL = 0.75;
+  function buildHairCap(style, hexInt, cb) {
+    loadHairGeometry(style, function (geo) {
+      var group = new THREE.Group();
+      group.name = "hairAccessory";
+      var mesh = new THREE.Mesh(geo, buildHairAccessoryMaterial(hexInt));
+      group.add(mesh);
+      group.position.y = HAIR_FIT_OFFSET_Y;
+      mesh.scale.set(HAIR_FIT_RADIAL, 1, HAIR_FIT_RADIAL);
+      cb(group);
+    });
+  }
+
+  // ---------- scene setup ----------
+  var viewport = document.getElementById("viewport");
+  var loadingEl = document.getElementById("loading");
+  var scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x14161b);
+  scene.fog = new THREE.Fog(0x14161b, 8, 22);
+
+  var camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.1, 100);
+
+  var renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.outputEncoding = THREE.sRGBEncoding;
+  viewport.appendChild(renderer.domElement);
+
+  window.addEventListener("resize", function () {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  scene.add(new THREE.HemisphereLight(0xbfd6ff, 0x24211d, 0.8));
+  var key = new THREE.DirectionalLight(0xffffff, 0.6);
+  key.position.set(3, 6, 4);
+  scene.add(key);
+
+  var ground = new THREE.Mesh(
+    new THREE.CircleGeometry(6, 48),
+    new THREE.MeshStandardMaterial({ color: 0x1d2029, roughness: 1 })
+  );
+  ground.rotation.x = -Math.PI / 2;
+  scene.add(ground);
+
+  var grid = new THREE.GridHelper(12, 24, 0x2b2f3a, 0x21242c);
+  grid.position.y = 0.001;
+  scene.add(grid);
+
+  // ---------- simple orbit-drag camera control ----------
+  var target = new THREE.Vector3(0, 1.45, 0);
+  var radius = 2.0, theta = Math.PI / 5, phi = 1.35;
+  var dragging = false, lastX = 0, lastY = 0;
+  var autoRotate = false;
+
+  function updateCamera() {
+    var x = target.x + radius * Math.sin(phi) * Math.sin(theta);
+    var y = target.y + radius * Math.cos(phi);
+    var z = target.z + radius * Math.sin(phi) * Math.cos(theta);
+    camera.position.set(x, y, z);
+    camera.lookAt(target);
+  }
+  updateCamera();
+
+  renderer.domElement.addEventListener("pointerdown", function (e) {
+    dragging = true; lastX = e.clientX; lastY = e.clientY;
+  });
+  window.addEventListener("pointerup", function () { dragging = false; });
+  window.addEventListener("pointermove", function (e) {
+    if (!dragging) return;
+    var dx = e.clientX - lastX, dy = e.clientY - lastY;
+    lastX = e.clientX; lastY = e.clientY;
+    theta -= dx * 0.007;
+    phi = Math.min(Math.max(phi - dy * 0.007, 0.35), Math.PI - 0.35);
+    updateCamera();
+  });
+  renderer.domElement.addEventListener("wheel", function (e) {
+    e.preventDefault();
+    radius = Math.min(Math.max(radius + e.deltaY * 0.003, 1.6), 8);
+    updateCamera();
+  }, { passive: false });
+
+  // ---------- color helpers (hue/sat replace, luminance preserved) ----------
+  function hexToRgb(hex) {
+    var v = parseInt(hex.replace("#", ""), 16);
+    return { r: (v >> 16) & 255, g: (v >> 8) & 255, b: v & 255 };
+  }
+  function rgbToHsl(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    var max = Math.max(r, g, b), min = Math.min(r, g, b);
+    var h = 0, s = 0, l = (max + min) / 2;
+    if (max !== min) {
+      var d = max - min;
+      s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+      if (max === r) h = (g - b) / d + (g < b ? 6 : 0);
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h /= 6;
+    }
+    return [h, s, l];
+  }
+  function hue2rgb(p, q, t) {
+    if (t < 0) t += 1;
+    if (t > 1) t -= 1;
+    if (t < 1 / 6) return p + (q - p) * 6 * t;
+    if (t < 1 / 2) return q;
+    if (t < 2 / 3) return p + (q - p) * (2 / 3 - t) * 6;
+    return p;
+  }
+  function hslToRgb(h, s, l) {
+    var r, g, b;
+    if (s === 0) { r = g = b = l; }
+    else {
+      var q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+      var p = 2 * l - q;
+      r = hue2rgb(p, q, h + 1 / 3);
+      g = hue2rgb(p, q, h);
+      b = hue2rgb(p, q, h - 1 / 3);
+    }
+    return [r * 255, g * 255, b * 255];
+  }
+
+  // ---------- character loading ----------
+  var loader = new THREE.GLTFLoader();
+  var imgLoader = new THREE.ImageLoader();
+  imgLoader.setCrossOrigin("anonymous");
+  var cache = {}; // gender -> { root, material, originalMap, sourceData, maskData, hairTexture, headBone }
+  var currentModel = null;
+  var currentGender = "male";
+  var currentHairHex = "#3b2a1e";
+  var currentHairStyle = "default";
+  var currentHeight = 1;
+
+  function removeHairAccessory(hb) {
+    var old = hb.getObjectByName("hairAccessory");
+    if (!old) return;
+    hb.remove(old);
+    old.traverse(function (n) {
+      // geometry is shared/cached (hairGeometryCache) across every instance
+      // of a style — dispose only the per-instance material, never the
+      // geometry, or the next pick of this same style loads a dead buffer.
+      if (n.isMesh) n.material.dispose();
+    });
+  }
+
+  function rebuildHairAccessory(gender) {
+    var entry = cache[gender];
+    if (!entry || !entry.headBone) return;
+    var hb = entry.headBone;
+    removeHairAccessory(hb);
+    if (currentHairStyle === "default") return;
+
+    var requestedStyle = currentHairStyle;
+    var hexInt = parseInt(currentHairHex.replace("#", ""), 16);
+    buildHairCap(requestedStyle, hexInt, function (group) {
+      // fetch is async — bail if the user switched gender/style again
+      // before this particular request resolved, so a slow/late response
+      // can't clobber whatever is current now.
+      if (currentGender !== gender || currentHairStyle !== requestedStyle) return;
+      removeHairAccessory(hb); // in case a stale one slipped in meanwhile
+      hb.add(group);
+    });
+  }
+
+  function loadImageData(src, cb) {
+    var img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = function () {
+      var c = document.createElement("canvas");
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      var ctx = c.getContext("2d");
+      ctx.drawImage(img, 0, 0);
+      cb(ctx.getImageData(0, 0, c.width, c.height));
+    };
+    img.onerror = function (e) { console.error("image load failed", src, e); };
+    img.src = src;
+  }
+
+  // Skin tone is sampled straight from this model's own texture (a plain
+  // cheek pixel, picked by eye against the real texture image, not
+  // guessed/hardcoded) so the "shaved" scalp below matches this exact
+  // model's skin instead of some generic tone.
+  var SKIN_SAMPLE_PX = { x: 200, y: 320 };
+  function getSkinHex(gender) {
+    var entry = cache[gender];
+    if (!entry || !entry.sourceData) return "#c8977a";
+    var d = entry.sourceData.data;
+    var i = (SKIN_SAMPLE_PX.y * entry.sourceData.width + SKIN_SAMPLE_PX.x) * 4;
+    var r = d[i], g = d[i + 1], b = d[i + 2];
+    return "#" + [r, g, b].map(function (v) { return v.toString(16).padStart(2, "0"); }).join("");
+  }
+
+  function applyHairColor(gender, hex, shave) {
+    var entry = cache[gender];
+    if (!entry || !entry.sourceData || !entry.maskData) return; // not ready yet, will re-apply once loaded
+    var src = entry.sourceData, mask = entry.maskData;
+    var w = src.width, h = src.height;
+    var out = new ImageData(new Uint8ClampedArray(src.data), w, h);
+    var target = hexToRgb(hex);
+    var thsl = rgbToHsl(target.r, target.g, target.b);
+    var sD = src.data, mD = mask.data, oD = out.data;
+    for (var i = 0; i < sD.length; i += 4) {
+      var m = mD[i] / 255; // grayscale mask stored in R channel
+      if (m < 0.04) continue;
+      var r = sD[i], g = sD[i + 1], b = sD[i + 2];
+      var rgb;
+      if (shave) {
+        // A hair style accessory is covering this area (e.g. a mohawk's
+        // shaved sides) — paint the baked scalp as skin directly, rather
+        // than hue-shifting hair's own strand shading into skin, which
+        // would leave visible dark/light streaks where hair used to be.
+        rgb = [target.r, target.g, target.b];
+      } else {
+        var lum = rgbToHsl(r, g, b)[2];
+        rgb = hslToRgb(thsl[0], thsl[1], lum);
+      }
+      oD[i] = sD[i] + (rgb[0] - sD[i]) * m;
+      oD[i + 1] = sD[i + 1] + (rgb[1] - sD[i + 1]) * m;
+      oD[i + 2] = sD[i + 2] + (rgb[2] - sD[i + 2]) * m;
+    }
+    var canvas = document.createElement("canvas");
+    canvas.width = w; canvas.height = h;
+    canvas.getContext("2d").putImageData(out, 0, 0);
+
+    var tex = new THREE.CanvasTexture(canvas);
+    tex.flipY = entry.originalMap.flipY;
+    tex.wrapS = entry.originalMap.wrapS;
+    tex.wrapT = entry.originalMap.wrapT;
+    tex.encoding = THREE.sRGBEncoding;
+    tex.needsUpdate = true;
+
+    if (entry.hairTexture) entry.hairTexture.dispose();
+    entry.hairTexture = tex;
+    entry.material.map = tex;
+    entry.material.needsUpdate = true;
+  }
+
+  function showModel(gender) {
+    currentGender = gender;
+    if (cache[gender] && cache[gender].root) {
+      placeModel(cache[gender].root);
+      return;
+    }
+    loadingEl.classList.remove("hidden");
+    loader.load(
+      MODELS[gender],
+      function (gltf) {
+        var root = gltf.scene;
+        var material = null;
+        var headBone = null;
+        root.traverse(function (node) {
+          if (node.isMesh) {
+            node.castShadow = true;
+            node.receiveShadow = true;
+            if (!material) material = node.material;
+          }
+          if (node.isBone && node.name === "Head") headBone = node;
+        });
+        cache[gender] = { root: root, material: material, originalMap: material.map, headBone: headBone };
+        placeModel(root);
+        rebuildHairAccessory(gender);
+
+        // prep source + mask pixel data in the background, then apply current hair color
+        var c = document.createElement("canvas");
+        c.width = material.map.image.width;
+        c.height = material.map.image.height;
+        c.getContext("2d").drawImage(material.map.image, 0, 0);
+        cache[gender].sourceData = c.getContext("2d").getImageData(0, 0, c.width, c.height);
+
+        loadImageData(HAIR_MASKS[gender], function (maskData) {
+          cache[gender].maskData = maskData;
+          refreshBakedHair(gender);
+        });
+      },
+      undefined,
+      function (err) {
+        loadingEl.textContent = "Failed to load " + MODELS[gender] + " — open this page over http(s), not file://.";
+        console.error(err);
+      }
+    );
+  }
+
+  function placeModel(root) {
+    if (currentModel && currentModel !== root) {
+      scene.remove(currentModel);
+    }
+    currentModel = root;
+    if (!scene.children.includes(root)) scene.add(root);
+    root.scale.setScalar(currentHeight);
+    loadingEl.classList.add("hidden");
+  }
+
+  showModel("male");
+
+  // ---------- UI wiring ----------
+  var btnMale = document.getElementById("btn-male");
+  var btnFemale = document.getElementById("btn-female");
+  function setGender(g) {
+    if (g === currentGender && cache[g] && cache[g].root) return;
+    btnMale.classList.toggle("active", g === "male");
+    btnFemale.classList.toggle("active", g === "female");
+    if (currentModel) scene.remove(currentModel);
+    showModel(g);
+  }
+  btnMale.addEventListener("click", function () { setGender("male"); });
+  btnFemale.addEventListener("click", function () { setGender("female"); });
+
+  // Only styles that deliberately expose scalp (currently just Punk's
+  // shaved-sides mohawk) need the baked hair "shaved" to skin underneath.
+  // Tried shaving for every style first — broke the full-coverage styles
+  // (Casual, Beach, ...): their accessory mesh doesn't quite reach the very
+  // front hairline the way the baked hair used to, so shaving there left a
+  // visible bald patch at the forehead (caught by screenshot). Full-coverage
+  // styles instead keep the normal hue-preserving recolor, which already
+  // blends seamlessly under their accessory.
+  var HAIR_STYLE_SHAVE = { punk: true };
+  function refreshBakedHair(gender) {
+    if (HAIR_STYLE_SHAVE[currentHairStyle]) {
+      applyHairColor(gender, getSkinHex(gender), true);
+    } else {
+      applyHairColor(gender, currentHairHex, false);
+    }
+  }
+
+  var hairInput = document.getElementById("col-hair");
+  hairInput.addEventListener("input", function (e) {
+    currentHairHex = e.target.value;
+    refreshBakedHair(currentGender);
+    rebuildHairAccessory(currentGender);
+  });
+
+  var swatchWrap = document.getElementById("hair-swatches");
+  HAIR_PRESETS.forEach(function (hex) {
+    var b = document.createElement("button");
+    b.style.background = hex;
+    b.title = hex;
+    b.addEventListener("click", function () {
+      currentHairHex = hex;
+      hairInput.value = hex;
+      refreshBakedHair(currentGender);
+      rebuildHairAccessory(currentGender);
+    });
+    swatchWrap.appendChild(b);
+  });
+
+  document.getElementById("sel-hairstyle").addEventListener("change", function (e) {
+    currentHairStyle = e.target.value;
+    refreshBakedHair(currentGender);
+    rebuildHairAccessory(currentGender);
+  });
+
+  document.getElementById("rng-height").addEventListener("input", function (e) {
+    currentHeight = parseFloat(e.target.value);
+    if (currentModel) currentModel.scale.setScalar(currentHeight);
+  });
+
+  var autorotateBtn = document.getElementById("autorotate");
+  autorotateBtn.addEventListener("click", function () {
+    autoRotate = !autoRotate;
+    autorotateBtn.classList.toggle("active", autoRotate);
+    autorotateBtn.textContent = "Auto-rotate: " + (autoRotate ? "on" : "off");
+  });
+
+  // ---------- render loop ----------
+  function animate() {
+    requestAnimationFrame(animate);
+    if (autoRotate && !dragging) {
+      theta += 0.004;
+      updateCamera();
+    }
+    renderer.render(scene, camera);
+  }
+  animate();
+})();
+</script>
+</body>
+</html>
