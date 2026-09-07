@@ -78,21 +78,51 @@ async function analyzePhoto(req, res) {
       return;
     }
 
-    const prompt = `Look at the person in this photo and estimate how to configure a simple 3D avatar to resemble them, using ONLY the options below (this avatar has a small fixed set of real assets, not free-form generation).
+    const prompt = `Analyze this photo and create a detailed 3D avatar description. Focus on accurately capturing the person's appearance.
 
-Hair style — pick exactly one key from this list, matching the photo as closely as possible:
+TASK:
+1. Determine gender from facial features, build, and clothing context
+2. Extract the actual visible skin tone (not stereotypical - measure the real color in the photo)
+3. Extract the actual visible hair color (measure the real color, accounting for lighting)
+4. Match hairstyle to the closest option available
+5. Estimate body build and facial structure
+
+GENDER: Choose "male" or "female" based on visible characteristics.
+
+SKIN TONE: Sample the skin color from the face (cheeks, forehead) and provide the average hex color. Account for:
+- Lighting conditions in the photo
+- Shadows vs. direct light areas
+- Use the actual skin visible, not what you assume their ethnicity might be
+- If lighting is very dim/bright, adjust mentally for normal lighting
+
+HAIR COLOR: Sample from the hair that's clearly visible (avoid shadows). Provide the actual hex color you see, accounting for:
+- Lighting (indoor vs outdoor affects perception)
+- Natural vs dyed appearance
+- Highlights and lowlights - use the dominant color
+- Grey/white hair: use greyish or silver tones (#808080 range for grey, #f0f0f0 for white)
+
+HAIRSTYLE: Pick the closest match from these options:
 ${HAIR_STYLE_DESCRIPTIONS}
 
-Respond with ONLY a JSON object, no other text, in exactly this shape:
+BODY & FACE WEIGHT:
+- bodyWeight: 0.75=slim/athletic, 1.0=average, 1.4=heavier build. Observe shoulders, chest, overall frame.
+- faceWeight: 0.8=narrow/angular face, 1.0=average, 1.3=rounder/fuller face. Look at cheek prominence, jaw width.
+
+EDGE CASES:
+- If face is partially obscured, estimate from visible features
+- If wearing hat/hair covered, still pick the closest hairstyle based on hair visible
+- If no hair visible, use "default"
+- If person is bald/shaved head, use "default"
+
+Respond with ONLY valid JSON, no markdown, no explanation:
 {
-  "genderGuess": "male" | "female",
-  "skinToneHex": "#rrggbb",
-  "hairColorHex": "#rrggbb",
-  "hairStyle": one of the keys listed above (default, casual, casual2, adventurer, beach, suit, king, punk),
-  "bodyWeight": number from 0.75 (slim) to 1.4 (heavy), 1.0 is average build,
-  "faceWeight": number from 0.8 (narrow face) to 1.3 (fuller face), 1.0 is average
-}
-Estimate skinToneHex and hairColorHex as the actual average color you see, not a stereotype. If a face isn't clearly visible, do your best reasonable guess rather than refusing.`;
+  "genderGuess": "male" or "female",
+  "skinToneHex": "#rrggbb (actual color from face in photo)",
+  "hairColorHex": "#rrggbb (actual color from hair in photo)",
+  "hairStyle": "default, casual, casual2, adventurer, beach, suit, king, or punk",
+  "bodyWeight": 0.75 to 1.4,
+  "faceWeight": 0.8 to 1.3
+}`;
 
     try {
       const apiRes = await fetch("https://api.openai.com/v1/chat/completions", {
