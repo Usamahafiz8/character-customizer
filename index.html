@@ -224,6 +224,7 @@
       <option value="suit">Suit</option>
       <option value="king">King (grey)</option>
       <option value="punk">Punk (mohawk)</option>
+      <option value="dreads">Dreads (textured)</option>
     </select>
   </div>
   <div class="row"><span>Hair color</span><input type="color" id="col-hair" value="#3b2a1e"></div>
@@ -305,9 +306,41 @@
     beach: "models/hair/beach.bin",
     suit: "models/hair/suit.bin",
     king: "models/hair/king.bin",
-    punk: "models/hair/punk.bin"
+    punk: "models/hair/punk.bin",
+    dreads: "models/hair/dreads.bin"
+  };
+  // "Dreads" is the one style with a real baked texture (strand shading,
+  // highlights) instead of a flat color — from a DIFFERENT open-source pack
+  // than the other 7 (Quaternius): "Toon Dread Ponytail" by durchie, CC0,
+  // opengameart.org/content/toonlow-poly-dread-ponytail. That pack ships a
+  // reference head mesh alongside the hair (Genesis8Male, a common
+  // Daz3D/Blender base), which is what let this get positioned by real
+  // measurement instead of guessing — extraction re-expressed the hair
+  // relative to THAT head's own base-of-skull point (matching where this
+  // project's rig has its own Head bone) and rescaled by this rig's
+  // measured head size, same principle as the Quaternius hairstyles,
+  // just against a different reference head.
+  var HAIR_STYLE_TEXTURES = {
+    dreads: "models/hair/dreads_texture.png"
   };
   var hairGeometryCache = {}; // style -> THREE.BufferGeometry (fetched once, reused)
+  var hairTextureCache = {}; // style -> THREE.Texture (fetched once, reused)
+
+  function loadHairTexture(style, cb) {
+    if (!HAIR_STYLE_TEXTURES[style]) { cb(null); return; }
+    if (hairTextureCache[style]) { cb(hairTextureCache[style]); return; }
+    new THREE.TextureLoader().load(HAIR_STYLE_TEXTURES[style], function (tex) {
+      // This texture's UVs came from a glTF source, where the convention is
+      // flipY=false (GLTFLoader sets this automatically for you — loading
+      // the PNG directly via TextureLoader instead doesn't, and defaults to
+      // flipY=true, which would show the texture upside-down relative to
+      // what the extracted mesh's UVs expect).
+      tex.flipY = false;
+      tex.encoding = THREE.sRGBEncoding;
+      hairTextureCache[style] = tex;
+      cb(tex);
+    });
+  }
 
   function loadHairGeometry(style, cb) {
     if (hairGeometryCache[style]) { cb(hairGeometryCache[style]); return; }
@@ -331,7 +364,7 @@
     });
   }
 
-  function buildHairAccessoryMaterial(hexInt) {
+  function buildHairAccessoryMaterial(hexInt, texture) {
     // MeshBasicMaterial (unlit), not MeshStandardMaterial: the avatar's own
     // baked material uses KHR_materials_unlit (flat color, ignores scene
     // lighting entirely). A lit PBR material on the accessory rendered grey/
@@ -342,34 +375,49 @@
     // the framebuffer on output (a texture has its own .encoding to offset
     // that; a plain hex Color doesn't, so it was rendering lighter than
     // picked — confirmed by sampling, not assumed) — see README.
+    //
+    // Textured styles (currently just Dreads) keep color at white — a flat
+    // hue tint would fight the texture's own baked shading/highlight detail,
+    // the whole reason it was added. The "Hair color" picker is a no-op for
+    // this one style by design.
     return new THREE.MeshBasicMaterial({
-      color: new THREE.Color(hexInt).convertSRGBToLinear(),
+      color: new THREE.Color(texture ? 0xffffff : hexInt).convertSRGBToLinear(),
+      map: texture || null,
       side: THREE.DoubleSide
     });
   }
 
   // The extraction math (README) places hair by measured head-bone
   // geometry, but a zoomed screenshot (not assumption) showed real gaps:
-  // this pack's hair is built from ~700+ small disconnected "hair card"
-  // pieces (a normal stylized-hair technique), individually fit to sit
-  // flush against QUATERNIUS's own head. A uniform scale-up was tried first
-  // (up to 1.4x) and did NOT close the gaps — scaling about the head-bone
-  // origin grows the whole cap, including its distance from the surface, so
-  // the gap just grows with it. What actually worked, confirmed by
-  // screenshot: pulling the cards radially inward (X/Z only, toward the
+  // the Quaternius pack's hair is built from ~700+ small disconnected "hair
+  // card" pieces (a normal stylized-hair technique), individually fit to
+  // sit flush against QUATERNIUS's own head. A uniform scale-up was tried
+  // first (up to 1.4x) and did NOT close the gaps — scaling about the
+  // head-bone origin grows the whole cap, including its distance from the
+  // surface, so the gap just grows with it. What actually worked, confirmed
+  // by screenshot: pulling the cards radially inward (X/Z only, toward the
   // head's own vertical axis — NOT a uniform 3-axis scale) so they hug this
   // rig's slightly different head contour, plus a small downward nudge.
-  var HAIR_FIT_OFFSET_Y = -0.02;
-  var HAIR_FIT_RADIAL = 0.75;
+  // Per-style, not global: Dreads comes from an unrelated pack with its own
+  // extraction/reference-head math (see HAIR_STYLE_TEXTURES above) — the
+  // Quaternius-specific correction below has no reason to also apply there,
+  // it needs its own fit checked by screenshot once it's actually rendered.
+  var HAIR_FIT = {
+    dreads: { offsetY: 0, radial: 1 }
+  };
+  var HAIR_FIT_DEFAULT = { offsetY: -0.02, radial: 0.75 };
   function buildHairCap(style, hexInt, cb) {
     loadHairGeometry(style, function (geo) {
-      var group = new THREE.Group();
-      group.name = "hairAccessory";
-      var mesh = new THREE.Mesh(geo, buildHairAccessoryMaterial(hexInt));
-      group.add(mesh);
-      group.position.y = HAIR_FIT_OFFSET_Y;
-      mesh.scale.set(HAIR_FIT_RADIAL, 1, HAIR_FIT_RADIAL);
-      cb(group);
+      loadHairTexture(style, function (texture) {
+        var group = new THREE.Group();
+        group.name = "hairAccessory";
+        var mesh = new THREE.Mesh(geo, buildHairAccessoryMaterial(hexInt, texture));
+        group.add(mesh);
+        var fit = HAIR_FIT[style] || HAIR_FIT_DEFAULT;
+        group.position.y = fit.offsetY;
+        mesh.scale.set(fit.radial, 1, fit.radial);
+        cb(group);
+      });
     });
   }
 
@@ -791,6 +839,39 @@
   // shaving, also collapse those specific vertices inward so the bump
   // itself disappears, not just its color.
   var HAIR_BUMP_UV_RECT = { u0: 768 / 1024, u1: 896 / 1024, v0: 896 / 1024, v1: 1024 / 1024 };
+
+  // Every real hairstyle mesh (except Punk, which is deliberately partial —
+  // shaved sides) only covers the SIDES/CROWN/BACK of the scalp, never
+  // quite reaching the exact front hairline the way the baked texture
+  // does. Previously only Punk shaved the baked hair underneath, so for
+  // every other style the model's OWN original hair kept showing through
+  // wherever the accessory didn't fully cover — reported directly: "why my
+  // previous is also showing there... my previous hair should disappear".
+  // Shaving the FULL hair mask for every style was tried before and
+  // regressed differently (a bald patch at the very front hairline, where
+  // full-coverage styles' meshes DO reach and used to blend with the
+  // baked hair). The fix is narrower: shave only the flat bulk-hair-volume
+  // swatch (HAIR_BUMP_UV_RECT — the same region already geometrically
+  // hidden by setHairBumpHidden) for every non-default style, leaving the
+  // front-hairline photo-detail region alone so it still blends correctly
+  // right where full-coverage styles' meshes actually reach.
+  var volumeSwatchMaskCache = {};
+  function getVolumeSwatchMask(w, h) {
+    var key = w + "x" + h;
+    if (volumeSwatchMaskCache[key]) return volumeSwatchMaskCache[key];
+    var data = new Uint8ClampedArray(w * h * 4);
+    var x0 = Math.round(HAIR_BUMP_UV_RECT.u0 * w), x1 = Math.round(HAIR_BUMP_UV_RECT.u1 * w);
+    var y0 = Math.round(HAIR_BUMP_UV_RECT.v0 * h), y1 = Math.round(HAIR_BUMP_UV_RECT.v1 * h);
+    for (var y = y0; y < y1; y++) {
+      for (var x = x0; x < x1; x++) {
+        var i = (y * w + x) * 4;
+        data[i] = data[i + 1] = data[i + 2] = 255; data[i + 3] = 255;
+      }
+    }
+    var mask = new ImageData(data, w, h);
+    volumeSwatchMaskCache[key] = mask;
+    return mask;
+  }
   function computeHairBump(gender) {
     var entry = cache[gender];
     var geo = entry.geometry;
@@ -1133,6 +1214,17 @@
       var shaveOn = !!HAIR_STYLE_SHAVE[currentHairStyle];
       var hairHex = shaveOn ? (currentSkinHex || getSkinHex(gender)) : currentHairHex;
       blendMaskedRegion(out, src, entry.hairMaskData, hairHex, shaveOn ? "flat" : "absolute");
+
+      // Any real accessory (not just a full-shave style like Punk) covers
+      // the bulk scalp/crown/back but not the exact front hairline — shave
+      // just that bulk-volume swatch too, on top of whatever the pass above
+      // did there, so the model's own original hair can't show through the
+      // accessory's edges. Skipped for shave styles: they already got the
+      // full flat-skin treatment above, no need to redo this small region.
+      if (currentHairStyle !== "default" && !shaveOn) {
+        var skinHex = currentSkinHex || getSkinHex(gender);
+        blendMaskedRegion(out, src, getVolumeSwatchMask(w, h), skinHex, "flat");
+      }
     }
     if (entry.skinMaskData && currentSkinHex) {
       var naturalRgb = hexToRgb(getSkinHex(gender));
@@ -1573,7 +1665,11 @@
   var HAIR_STYLE_SHAVE = { punk: true };
   function refreshBakedHair(gender) {
     rebuildTexture(gender);
-    setHairBumpHidden(gender, !!HAIR_STYLE_SHAVE[currentHairStyle]);
+    // The geometric bump and its now-shaved color (see the volume-swatch
+    // pass in rebuildTexture above) go together — hide the bump whenever
+    // ANY real accessory is worn, not just full-shave styles like Punk,
+    // since every style now shaves that same swatch underneath it.
+    setHairBumpHidden(gender, currentHairStyle !== "default");
   }
 
   var skinInput = document.getElementById("col-skin");
