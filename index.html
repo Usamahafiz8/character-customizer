@@ -1409,7 +1409,17 @@
     eyedropperHint.style.display = "block";
     btnAnalyze.style.display = "block";
     localSkinToneHex = canvas ? extractSkinToneFromCanvas(canvas) : null;
-    setPhotoStatus(localSkinToneHex ? "Skin tone measured directly from your photo. Or click your skin above to pick it exactly." : "");
+    if (localSkinToneHex) {
+      // Applies immediately — free, no AI call needed for this part, and no
+      // extra button press. "Analyze & apply" is still there for hair
+      // style/color/build, which really do need the AI; skin tone doesn't.
+      currentSkinHex = localSkinToneHex;
+      document.getElementById("col-skin").value = localSkinToneHex;
+      rebuildTexture(currentGender);
+      setPhotoStatus("Skin tone auto-picked and applied. Click your skin above to fine-tune it if it's off.");
+    } else {
+      setPhotoStatus("Couldn't find a clear face to auto-pick from — click your skin above to set it manually.");
+    }
   }
 
   document.getElementById("btn-selfie").addEventListener("click", function () {
