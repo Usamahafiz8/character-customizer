@@ -121,6 +121,56 @@
     border-color: #4a7cff;
     color: #fff;
   }
+  .photo-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 6px;
+  }
+  .photo-btn {
+    flex: 1;
+    padding: 7px 0;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: transparent;
+    color: #ccc;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  .photo-btn:hover { border-color: rgba(255,255,255,0.3); }
+  #selfie-video, #photo-preview {
+    display: none;
+    width: 100%;
+    border-radius: 8px;
+    margin-bottom: 2px;
+    background: #000;
+    cursor: crosshair;
+  }
+  #eyedropper-hint {
+    display: none;
+    font-size: 10.5px;
+    color: #6a9bff;
+    margin-bottom: 6px;
+  }
+  #btn-capture, #btn-analyze {
+    display: none;
+    width: 100%;
+    padding: 7px 0;
+    margin-bottom: 6px;
+    border-radius: 8px;
+    border: 1px solid #4a7cff;
+    background: rgba(74,124,255,0.2);
+    color: #fff;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  #btn-analyze:disabled { opacity: 0.5; cursor: default; }
+  #photo-status {
+    font-size: 11px;
+    color: #889;
+    min-height: 14px;
+    margin-bottom: 4px;
+  }
+  #photo-status.error { color: #e07a5f; }
   #loading {
     position: fixed;
     inset: 0;
@@ -145,6 +195,25 @@
     <button id="btn-female">Female</button>
   </div>
 
+  <div class="photo-row">
+    <button class="photo-btn" id="btn-selfie">📷 Take selfie</button>
+    <button class="photo-btn" id="btn-upload">📁 Upload photo</button>
+  </div>
+  <input type="file" id="file-photo" accept="image/*" style="display:none">
+  <video id="selfie-video" autoplay playsinline muted></video>
+  <div id="eyedropper-hint">👆 Click your skin (live or in the photo) to pick that exact color</div>
+  <button id="btn-capture">Capture</button>
+  <img id="photo-preview" alt="">
+  <button id="btn-analyze">Analyze &amp; apply to character</button>
+  <div id="photo-status"></div>
+
+  <div class="divider"></div>
+
+  <div class="row"><span>Skin tone</span><input type="color" id="col-skin" value="#c8977a"></div>
+  <div class="swatches" id="skin-swatches"></div>
+
+  <div class="divider"></div>
+
   <div class="row"><span>Hair style</span>
     <select id="sel-hairstyle">
       <option value="default">Default (baked)</option>
@@ -160,13 +229,38 @@
   <div class="row"><span>Hair color</span><input type="color" id="col-hair" value="#3b2a1e"></div>
   <div class="swatches" id="hair-swatches"></div>
 
+  <!-- Outfit UI hidden for now, not removed: the underlying pipeline (real
+  Quaternius meshes, real bone-name weight remap onto this rig, real
+  SkinnedMesh) is built and verified correct, but the garment geometry itself
+  still needs full FK pose-retargeting (Quaternius ships arms-out T-pose,
+  this rig's rest pose differs) before it looks right on the body — see
+  README. Verifying that fix is separately blocked right now by a bug in the
+  Animation feature's own "T-pose (static)" not reproducing the model's real
+  bind pose. Re-enable this <div> once both are sorted. -->
+  <div class="row" style="display:none"><span>Outfit</span>
+    <select id="sel-outfit">
+      <option value="none">None (base body)</option>
+      <option value="casual">Casual</option>
+    </select>
+  </div>
+
+  <div class="row"><span>Animation</span>
+    <select id="sel-animation">
+      <option value="tpose">T-pose (static)</option>
+      <option value="idle" selected>Idle</option>
+      <option value="dance1">Dance 1</option>
+    </select>
+  </div>
+
   <div class="divider"></div>
 
   <div class="row"><span>Height</span><input type="range" id="rng-height" min="0.85" max="1.15" step="0.01" value="1"></div>
+  <div class="row"><span>Body weight</span><input type="range" id="rng-bodyweight" min="0.75" max="1.4" step="0.01" value="1"></div>
+  <div class="row"><span>Face weight</span><input type="range" id="rng-faceweight" min="0.8" max="1.3" step="0.01" value="1"></div>
 
   <div class="divider"></div>
   <button id="autorotate">Auto-rotate: off</button>
-  <div class="hint">Drag to orbit &middot; scroll to zoom<br>Hair color is a real per-pixel mask on the model's own texture. Hair style swaps in a real hair mesh (from Quaternius's CC0 Ultimate Modular Characters pack), refit onto this model's head bone (see README).</div>
+  <div class="hint">Drag to orbit &middot; scroll to zoom<br>Skin tone and hair color are real per-pixel masks on the model's own texture. Hair style and Outfit both swap in real meshes (from Quaternius's CC0 Ultimate Modular Characters pack), refit onto this model's head/hips bones (see README).</div>
 </div>
 
 <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
@@ -183,7 +277,12 @@
     male: "models/masculine_hair_mask.png",
     female: "models/feminine_hair_mask.png"
   };
+  var SKIN_MASKS = {
+    male: "models/masculine_skin_mask.png",
+    female: "models/feminine_skin_mask.png"
+  };
   var HAIR_PRESETS = ["#0b0b0b", "#3b2a1e", "#6b4226", "#a85c2c", "#c99a4b", "#8a8a8a", "#e6e6e6", "#c0392b"];
+  var SKIN_PRESETS = ["#ffe0bd", "#f1c27d", "#e0ac81", "#c68642", "#a86b3c", "#8d5524", "#5a3825", "#3b2417"];
 
   // ---------- hairstyle geometry: real assets ----------
   // Real hair meshes extracted from Quaternius's "Ultimate Modular
@@ -271,6 +370,139 @@
       group.position.y = HAIR_FIT_OFFSET_Y;
       mesh.scale.set(HAIR_FIT_RADIAL, 1, HAIR_FIT_RADIAL);
       cb(group);
+    });
+  }
+
+  // ---------- outfit geometry: real assets, real skinning ----------
+  // Real clothing meshes from the same Quaternius CC0 pack family as the
+  // hairstyles (quaternius.com/packs/ultimatemodularcharacters.html and
+  // .../ultimatemodularwomen.html — "Ultimate Modular Males/Females"), NOT
+  // procedural shapes. That pack ships each outfit pre-split per body region
+  // ("Separate Skeletal Meshes and Animations/<Outfit>/<Outfit>_Body|Legs|
+  // Feet|Head.fbx") with real UVs and per-region materials, so no mask-based
+  // extraction was needed — just picking the non-"Skin" material out of each
+  // region (see models/outfits/*.bin, built by a one-off Python script, not
+  // checked into this app).
+  //
+  // First version (rigid, non-skinned, glued to the Hips bone like the hair
+  // cap) looked completely broken — screenshot showed a huge flung-out wing
+  // of geometry — even in this rig's own "T-pose (static)". Root cause,
+  // confirmed by comparing bone rotations, not assumed: this RPM rig's rest
+  // pose has the arms mostly DOWN at the sides, while Quaternius's own
+  // source FBX was authored in a classic arms-out horizontal T-pose. A rigid
+  // mesh can only ever show up in the pose it was authored in, so sleeves
+  // and pant legs — anything crossing a shoulder/hip/knee joint — showed up
+  // at completely the wrong angle. Hair got away with rigid attachment only
+  // because a head cap doesn't cross a joint.
+  //
+  // Real fix: proper skinning. Each outfit vertex was baked into this rig's
+  // own model-space (assimp -ptv bind-pose world coords, rebased off the
+  // pack's own Hips joint onto measured this-project Hips position, rescaled
+  // by total mesh height), then given its OWN skinIndex/skinWeight by
+  // nearest-neighbor lookup against the RPM body mesh's real skin data (read
+  // directly from Masculine.glb/Feminine.glb's JOINTS_0/WEIGHTS_0 — the
+  // exact same joint index numbering Three.js's GLTFLoader uses for
+  // `skeleton.bones`, so no reindexing needed): for each outfit vertex, blend
+  // the 4 nearest body vertices' bone weights by inverse distance, then keep
+  // that vertex's own top 4 bones renormalized to sum to 1. Standard
+  // nearest-neighbor weight transfer for fitting a new mesh onto a skeleton
+  // it wasn't authored for. Loaded below as a real THREE.SkinnedMesh sharing
+  // this avatar's own THREE.Skeleton (see rebuildOutfit) — it now deforms
+  // with whatever pose the body is actually in, T-pose or animated.
+  var OUTFIT_PIECES = {
+    casual: {
+      male: [
+        { file: "models/outfits/casual_male_top.bin", color: [0.0504080243, 0.0305635016, 0.0836931989] },    // hoodie ("Purple" material)
+        { file: "models/outfits/casual_male_bottom.bin", color: [0.0264838226, 0.0397652611, 0.0504080243] }, // jeans ("LightBlue" material)
+        { file: "models/outfits/casual_male_shoes.bin", color: [0.0504080243, 0.0305635016, 0.0836931989] }   // shoes (combined "White"+"Purple" sub-meshes, shown in the accent "Purple")
+      ],
+      female: [
+        { file: "models/outfits/casual_female_top.bin", color: [0.366017848, 0.366017848, 0.366017848] },     // top ("White" material)
+        { file: "models/outfits/casual_female_bottom.bin", color: [0.273903847, 0.0971288234, 0.0318684056] },// pants ("Orange" material)
+        { file: "models/outfits/casual_female_shoes.bin", color: [0.0397652611, 0.0397652611, 0.0397652611] } // shoes ("Grey" material)
+      ]
+    }
+  };
+  var outfitGeometryCache = {}; // file path -> THREE.BufferGeometry (fetched once, reused)
+
+  function loadOutfitPieceGeometry(file, cb) {
+    if (outfitGeometryCache[file]) { cb(outfitGeometryCache[file]); return; }
+    fetch(file).then(function (res) { return res.arrayBuffer(); }).then(function (buf) {
+      var dv = new DataView(buf);
+      var vertCount = dv.getUint32(0, true);
+      var idxCount = dv.getUint32(4, true);
+      var off = 8;
+      var positions = new Float32Array(buf, off, vertCount * 3); off += vertCount * 3 * 4;
+      var normals = new Float32Array(buf, off, vertCount * 3); off += vertCount * 3 * 4;
+      var uvs = new Float32Array(buf, off, vertCount * 2); off += vertCount * 2 * 4;
+      // skinIndex is stored as uint16 (matches skeleton.bones indices, which
+      // for this rig go past 255 — a uint8 would silently truncate them).
+      var skinIndexRaw = new Uint16Array(buf, off, vertCount * 4); off += vertCount * 4 * 2;
+      var skinWeight = new Float32Array(buf, off, vertCount * 4); off += vertCount * 4 * 4;
+      var indices = new Uint32Array(buf, off, idxCount);
+
+      var geo = new THREE.BufferGeometry();
+      geo.setAttribute("position", new THREE.BufferAttribute(positions, 3));
+      geo.setAttribute("normal", new THREE.BufferAttribute(normals, 3));
+      geo.setAttribute("uv", new THREE.BufferAttribute(uvs, 2));
+      geo.setAttribute("skinIndex", new THREE.Uint16BufferAttribute(skinIndexRaw, 4));
+      geo.setAttribute("skinWeight", new THREE.BufferAttribute(skinWeight, 4));
+      geo.setIndex(new THREE.BufferAttribute(indices, 1));
+      outfitGeometryCache[file] = geo;
+      cb(geo);
+    }).catch(function (err) {
+      console.error("outfit piece failed to load", file, err);
+    });
+  }
+
+  function buildOutfitPieceMaterial(colorArr) {
+    // MeshBasicMaterial (unlit) for the same reason as the hair accessory
+    // (buildHairAccessoryMaterial above): the avatar's own baked material is
+    // KHR_materials_unlit, and a lit material rendered grey/washed-out next
+    // to it under this scene's lights. MeshBasicMaterial does support
+    // skinning in three r128 (skinning is a vertex-shader feature, orthogonal
+    // to whether the material is lit) — no special material flag needed.
+    //
+    // NO convertSRGBToLinear here, unlike the hair accessory's hex color —
+    // that call exists specifically because a color-picker hex (like
+    // "#3b2a1e") is a value a human picked/perceives in sRGB space. These
+    // colors instead come straight from each FBX's own Kd (diffuse) value,
+    // which Blender/FBX already store and export as linear — feeding them
+    // through convertSRGBToLinear a second time would darken them further
+    // and no longer match the source asset's real appearance.
+    return new THREE.MeshBasicMaterial({
+      color: new THREE.Color(colorArr[0], colorArr[1], colorArr[2]),
+      side: THREE.DoubleSide,
+      skinning: true
+    });
+  }
+
+  // Builds one outfit as real THREE.SkinnedMesh instances sharing `skeleton`
+  // (this avatar's own live THREE.Skeleton — NOT a copy) and `bindMatrix`
+  // (this avatar's own body mesh's bind matrix, which this project's rig has
+  // as identity, but reusing it rather than assuming that stays reusing the
+  // exact same rest-pose reference frame the skin weights were transferred
+  // against). Every outfit vertex already sits in that same model-space
+  // (see the big comment above), so this "just works" the same way the
+  // body's own SkinnedMesh does — no bone-parenting needed, unlike hair.
+  function buildOutfit(styleKey, gender, skeleton, bindMatrix, cb) {
+    var pieces = OUTFIT_PIECES[styleKey] && OUTFIT_PIECES[styleKey][gender];
+    if (!pieces) { cb(null); return; }
+    var group = new THREE.Group();
+    group.name = "outfitAccessory";
+    var remaining = pieces.length;
+    pieces.forEach(function (piece) {
+      loadOutfitPieceGeometry(piece.file, function (geo) {
+        var mesh = new THREE.SkinnedMesh(geo, buildOutfitPieceMaterial(piece.color));
+        mesh.bind(skeleton, bindMatrix);
+        // Bounding volumes are computed from bind-pose geometry alone, not
+        // the live animated pose — a dance clip's arm swing can carry
+        // vertices well outside that box and pop the mesh from view.
+        mesh.frustumCulled = false;
+        group.add(mesh);
+        remaining--;
+        if (remaining === 0) cb(group);
+      });
     });
   }
 
@@ -388,12 +620,73 @@
   var loader = new THREE.GLTFLoader();
   var imgLoader = new THREE.ImageLoader();
   imgLoader.setCrossOrigin("anonymous");
-  var cache = {}; // gender -> { root, material, originalMap, sourceData, maskData, hairTexture, headBone }
+  var cache = {}; // gender -> { root, material, originalMap, sourceData, hairMaskData, skinMaskData, bakedTexture, headBone }
   var currentModel = null;
   var currentGender = "male";
   var currentHairHex = "#3b2a1e";
   var currentHairStyle = "default";
+  var currentOutfit = "none";
+  var currentSkinHex = null; // null = leave the model's own natural skin tone alone until the user actually picks one
   var currentHeight = 1;
+  var currentBodyWeight = 1;
+  var currentFaceWeight = 1;
+  var currentAnimation = "idle"; // default on: shipped with the character frozen in a T-pose otherwise, which is what "make him move" was about
+
+  // ---------- animation: real clips, not the static bind pose ----------
+  // Real motion-captured clips for this exact rig — same skeleton/bone
+  // names verified earlier (Hips/Spine/Spine1/Spine2/Neck/Head/...), copied
+  // from avatar-anim-v2/models/rpm/clips, which already established (see
+  // that project's own notes) that F_-prefixed clips retarget correctly
+  // onto either body: one shared skeleton, so the clip's own gender prefix
+  // doesn't matter. Reused rather than rebuilt, same reasoning as hair/
+  // outfit: real assets already sitting in a sibling project beat building
+  // a pose system from scratch.
+  var ANIMATION_CLIPS = {
+    idle: "models/anim/idle.glb",
+    dance1: "models/anim/dance1.glb"
+  };
+  var animationClipCache = {}; // name -> THREE.AnimationClip (shared across genders, same skeleton)
+  var animLoader = new THREE.GLTFLoader();
+
+  function loadAnimationClip(name, cb) {
+    if (animationClipCache[name]) { cb(animationClipCache[name]); return; }
+    animLoader.load(ANIMATION_CLIPS[name], function (gltf) {
+      var clip = gltf.animations[0];
+      animationClipCache[name] = clip;
+      cb(clip);
+    }, undefined, function (err) {
+      console.error("animation clip failed to load", name, err);
+    });
+  }
+
+  function applyAnimation(gender, name) {
+    var entry = cache[gender];
+    if (!entry || !entry.mixer) return;
+    if (name === "tpose") {
+      // Stopping a mixer action just freezes bones at their last evaluated
+      // transform, mid-pose — it does not revert them. Skeleton.pose()
+      // resets every bone to its real bind-pose transform, which is the
+      // actual "T-pose" the model shipped with.
+      entry.mixer.stopAllAction();
+      entry.currentAction = null;
+      entry.skeleton.pose();
+      return;
+    }
+    var requestedAnim = name;
+    loadAnimationClip(name, function (clip) {
+      // async load — bail if the user picked something else already, or
+      // switched gender/model, before this particular clip finished loading.
+      if (currentGender !== gender || currentAnimation !== requestedAnim || cache[gender] !== entry) return;
+      var action = entry.mixer.clipAction(clip);
+      action.reset();
+      if (entry.currentAction && entry.currentAction !== action) {
+        entry.currentAction.fadeOut(0.3);
+        action.fadeIn(0.3);
+      }
+      action.play();
+      entry.currentAction = action;
+    });
+  }
 
   function removeHairAccessory(hb) {
     var old = hb.getObjectByName("hairAccessory");
@@ -426,6 +719,39 @@
     });
   }
 
+  function removeOutfit(root) {
+    var old = root.getObjectByName("outfitAccessory");
+    if (!old) return;
+    root.remove(old);
+    old.traverse(function (n) {
+      // geometry is shared/cached (outfitGeometryCache) across every
+      // instance of a style — dispose only the per-instance material, same
+      // rule as removeHairAccessory above.
+      if (n.isMesh) n.material.dispose();
+    });
+  }
+
+  // Unlike hair (parented onto the Head BONE, so it inherits that bone's own
+  // transform), the outfit group is added straight onto the model's `root`
+  // Object3D — each piece is a real THREE.SkinnedMesh bound to this avatar's
+  // own skeleton, so IT already tracks every bone's pose; parenting it onto
+  // any one bone on top of that would double-apply that bone's transform.
+  function rebuildOutfit(gender) {
+    var entry = cache[gender];
+    if (!entry || !entry.skeleton) return;
+    removeOutfit(entry.root);
+    if (currentOutfit === "none") return;
+
+    var requestedOutfit = currentOutfit;
+    buildOutfit(requestedOutfit, gender, entry.skeleton, entry.bindMatrix, function (group) {
+      // same async-race guard as rebuildHairAccessory: bail if the user
+      // switched gender/outfit again before this particular fetch resolved.
+      if (currentGender !== gender || currentOutfit !== requestedOutfit || !group) return;
+      removeOutfit(entry.root);
+      entry.root.add(group);
+    });
+  }
+
   function loadImageData(src, cb) {
     var img = new Image();
     img.crossOrigin = "anonymous";
@@ -454,34 +780,366 @@
     return "#" + [r, g, b].map(function (v) { return v.toString(16).padStart(2, "0"); }).join("");
   }
 
-  function applyHairColor(gender, hex, shave) {
+  // The baked "hair" isn't just texture: a chunk of the body mesh's own
+  // geometry actually bulges outward to give hair its 3D volume (confirmed
+  // by inspecting the glb directly — those vertices' UVs land exactly on
+  // the same flat-color swatch identified earlier for the bulk hair
+  // volume). Recoloring that region to skin (applyHairColor's "shave" mode)
+  // only changes its color, not its shape — on the female model this left
+  // a large skin-toned BUMP still sticking out behind a "shaved" mohawk
+  // (caught by screenshot, not assumed). Real fix: when a style needs
+  // shaving, also collapse those specific vertices inward so the bump
+  // itself disappears, not just its color.
+  var HAIR_BUMP_UV_RECT = { u0: 768 / 1024, u1: 896 / 1024, v0: 896 / 1024, v1: 1024 / 1024 };
+  function computeHairBump(gender) {
     var entry = cache[gender];
-    if (!entry || !entry.sourceData || !entry.maskData) return; // not ready yet, will re-apply once loaded
-    var src = entry.sourceData, mask = entry.maskData;
-    var w = src.width, h = src.height;
-    var out = new ImageData(new Uint8ClampedArray(src.data), w, h);
+    var geo = entry.geometry;
+    var uv = geo.attributes.uv;
+    var pos = geo.attributes.position;
+    var indices = [];
+    for (var i = 0; i < uv.count; i++) {
+      var u = uv.getX(i), v = uv.getY(i);
+      if (u >= HAIR_BUMP_UV_RECT.u0 && u <= HAIR_BUMP_UV_RECT.u1 &&
+          v >= HAIR_BUMP_UV_RECT.v0 && v <= HAIR_BUMP_UV_RECT.v1) {
+        indices.push(i);
+      }
+    }
+    var orig = new Float32Array(indices.length * 3);
+    var cx = 0, cy = 0, cz = 0;
+    for (var k = 0; k < indices.length; k++) {
+      var idx = indices[k];
+      var x = pos.getX(idx), y = pos.getY(idx), z = pos.getZ(idx);
+      orig[k * 3] = x; orig[k * 3 + 1] = y; orig[k * 3 + 2] = z;
+      cx += x; cy += y; cz += z;
+    }
+    if (indices.length) { cx /= indices.length; cy /= indices.length; cz /= indices.length; }
+    entry.bumpIndices = indices;
+    entry.bumpOrigPos = orig;
+    entry.bumpCentroid = [cx, cy, cz];
+    entry.bumpHidden = false;
+  }
+
+  function setHairBumpHidden(gender, hidden) {
+    var entry = cache[gender];
+    if (!entry || !entry.bumpIndices || !entry.bumpIndices.length) return;
+    if (entry.bumpHidden === hidden) return;
+    var geo = entry.geometry;
+    var pos = geo.attributes.position;
+    var c = entry.bumpCentroid;
+    var SHRINK = 0.1; // collapse the bump ~90% of the way to its centroid — tucks it inside the head's own surface rather than leaving a visible dent
+    for (var k = 0; k < entry.bumpIndices.length; k++) {
+      var idx = entry.bumpIndices[k];
+      var ox = entry.bumpOrigPos[k * 3], oy = entry.bumpOrigPos[k * 3 + 1], oz = entry.bumpOrigPos[k * 3 + 2];
+      if (hidden) {
+        pos.setXYZ(idx, c[0] + (ox - c[0]) * SHRINK, c[1] + (oy - c[1]) * SHRINK, c[2] + (oz - c[2]) * SHRINK);
+      } else {
+        pos.setXYZ(idx, ox, oy, oz);
+      }
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+    entry.bumpHidden = hidden;
+  }
+
+  // ---------- body/face weight (fat/slim) ----------
+  // No morph targets on this rig (checked earlier). Same technique already
+  // proven twice above (hair-bump hiding here, jaw width in the sibling
+  // avatar-component project): reshape the BIND-POSE vertices selected by
+  // which bone dominates their skin weight — skinning itself is untouched,
+  // so it keeps animating/posing correctly afterward. Bone names are this
+  // rig's own, verified against the actual glb (Mixamo-style —
+  // LeftArm/RightUpLeg/etc — NOT Quaternius's ".L" suffix convention from
+  // the hair pack; do not assume they match across projects).
+  var BODY_WEIGHT_GROUPS = [
+    { bones: ["Hips", "Spine", "Spine1", "Spine2"], axis: "xz" }, // torso+hips: character's width/depth plane
+    { bones: ["LeftShoulder", "LeftArm", "LeftForeArm"], axis: "yz" }, // arms run along X in this T-pose, so girth is Y/Z
+    { bones: ["RightShoulder", "RightArm", "RightForeArm"], axis: "yz" },
+    { bones: ["LeftUpLeg", "LeftLeg"], axis: "xz" }, // legs run along Y, so girth is X/Z
+    { bones: ["RightUpLeg", "RightLeg"], axis: "xz" }
+  ];
+
+  // First version hard-assigned each vertex to exactly one bone group (>=50%
+  // dominant weight) and scaled that group as a rigid block. That tore the
+  // mesh right at the shoulder/collar — real screenshot evidence: the
+  // shirt's chest logo came out visibly skewed there, because a vertex
+  // smoothly weighted across, say, Spine2 and LeftShoulder could land in
+  // either group while its immediate neighbor landed in the other, and the
+  // two groups scale on DIFFERENT axis pairs (torso xz vs arm yz) — a hard
+  // seam exactly where the rig itself blends smoothly. Fix: never assign a
+  // vertex to one group — give every vertex a fractional membership per
+  // group (the sum of its real skin weights toward that group's bones,
+  // 0..1) and blend continuously, so a 50/50 vertex gets a 50/50 blend of
+  // both groups' effects instead of jumping between them.
+  var VEC4_GETTERS = ["getX", "getY", "getZ", "getW"];
+  function computeBodyShapeGroups(gender) {
+    var entry = cache[gender];
+    var geo = entry.geometry, skeleton = entry.skeleton;
+    var pos = geo.attributes.position;
+    var skinIdx = geo.attributes.skinIndex;
+    var skinWt = geo.attributes.skinWeight;
+    var n = pos.count;
+    var boneNameList = skeleton.bones.map(function (b) { return b.name; });
+
+    var groupDefs = BODY_WEIGHT_GROUPS;
+    var groupBoneSets = groupDefs.map(function (cfg) {
+      var set = {};
+      cfg.bones.forEach(function (name) {
+        var idx = boneNameList.indexOf(name);
+        if (idx >= 0) set[idx] = true;
+      });
+      return set;
+    });
+
+    var orig = new Float32Array(n * 3);
+    for (var i = 0; i < n; i++) {
+      orig[i * 3] = pos.getX(i); orig[i * 3 + 1] = pos.getY(i); orig[i * 3 + 2] = pos.getZ(i);
+    }
+
+    // per-vertex fractional weight toward each group, plus a weighted
+    // centroid per group (vertices barely in a group barely pull its center)
+    var weights = groupDefs.map(function () { return new Float32Array(n); });
+    var centroidSum = groupDefs.map(function () { return [0, 0, 0, 0]; }); // x,y,z,totalWeight
+
+    for (var v = 0; v < n; v++) {
+      for (var g = 0; g < groupDefs.length; g++) {
+        var w = 0;
+        for (var k = 0; k < 4; k++) {
+          var getter = VEC4_GETTERS[k];
+          if (groupBoneSets[g][skinIdx[getter](v)]) w += skinWt[getter](v);
+        }
+        weights[g][v] = w;
+        if (w > 0.001) {
+          var cs = centroidSum[g];
+          cs[0] += orig[v * 3] * w; cs[1] += orig[v * 3 + 1] * w; cs[2] += orig[v * 3 + 2] * w; cs[3] += w;
+        }
+      }
+    }
+    var centroids = centroidSum.map(function (cs) {
+      return cs[3] > 0 ? [cs[0] / cs[3], cs[1] / cs[3], cs[2] / cs[3]] : [0, 0, 0];
+    });
+
+    entry.shapeOrig = orig;
+    entry.shapeGroups = groupDefs.map(function (cfg, g) {
+      return { axis: cfg.axis, weights: weights[g], centroid: centroids[g] };
+    });
+  }
+
+  // ---- face weight: ported directly from avatar-component's applyFaceShape
+  // (jawWidth), not the generic bone-group blend above. That generic
+  // approach scaled the WHOLE head uniformly around one centroid and broke
+  // at the extremes — the eye-socket skin moved while the separate eyeball
+  // geometry stayed put, a "googly eye" disconnect (caught by screenshot).
+  // This ported version instead only touches a Y-banded jaw/cheek region
+  // with a smoothstep falloff to zero by brow height, specifically staying
+  // clear of the eyes — the sibling project already hit this exact failure
+  // once and fixed it this way; reuse the fix instead of rediscovering it.
+  // Landmarks are this exact rig's own measured Y heights, copied verbatim.
+  var FACE_Y = { chin: 1.593, jaw: 1.71, brow: 1.8, crown: 1.839 };
+  function smoothstep(t) {
+    var c = Math.min(Math.max(t, 0), 1);
+    return c * c * (3 - 2 * c);
+  }
+  function jawInfluence(y) {
+    if (y <= FACE_Y.chin || y >= FACE_Y.brow) return 0;
+    if (y < FACE_Y.jaw) return smoothstep((y - FACE_Y.chin) / (FACE_Y.jaw - FACE_Y.chin));
+    return smoothstep(1 - (y - FACE_Y.jaw) / (FACE_Y.brow - FACE_Y.jaw));
+  }
+  // Eyeballs are separate geometry (their own "LeftEye"/"RightEye" bones,
+  // confirmed against the actual skeleton) — they never move with this
+  // deformation, only the head-skin around them does. Even a mild jaw-width
+  // narrowing pulled the socket skin in enough to expose white sclera past
+  // the still-fixed eyeball (caught by screenshot at weight as mild as
+  // 0.9). Fix: find each eyeball's own position (centroid of its
+  // dominantly-eye-bone-weighted vertices — same coordinate space as
+  // everything else here already, no cross-space conversion needed) and
+  // exclude any head vertex within a protective radius of either eye from
+  // the reshape entirely, so the socket ring stays put around the fixed
+  // eyeball no matter how far the slider goes.
+  var EYE_PROTECT_RADIUS = 0.045;
+  function boneWeightedCentroid(pos, skinIdx, skinWt, boneIdx) {
+    var sx = 0, sy = 0, sz = 0, sw = 0;
+    for (var i = 0; i < pos.count; i++) {
+      for (var k = 0; k < 4; k++) {
+        var getter = VEC4_GETTERS[k];
+        if (skinIdx[getter](i) === boneIdx) {
+          var w = skinWt[getter](i);
+          sx += pos.getX(i) * w; sy += pos.getY(i) * w; sz += pos.getZ(i) * w; sw += w;
+        }
+      }
+    }
+    return sw > 0 ? [sx / sw, sy / sw, sz / sw] : null;
+  }
+  function computeFaceWeightGroup(gender) {
+    var entry = cache[gender];
+    var geo = entry.geometry, skeleton = entry.skeleton;
+    var pos = geo.attributes.position;
+    var skinIdx = geo.attributes.skinIndex;
+    var skinWt = geo.attributes.skinWeight;
+    var boneNameList = skeleton.bones.map(function (b) { return b.name; });
+    var headBoneIdx = boneNameList.indexOf("Head");
+    var eyeCenters = ["LeftEye", "RightEye"].map(function (name) {
+      var idx = boneNameList.indexOf(name);
+      return idx >= 0 ? boneWeightedCentroid(pos, skinIdx, skinWt, idx) : null;
+    }).filter(Boolean);
+
+    var indices = [], origList = [];
+    for (var i = 0; i < pos.count; i++) {
+      var w = 0;
+      for (var k = 0; k < 4; k++) {
+        var getter = VEC4_GETTERS[k];
+        if (skinIdx[getter](i) === headBoneIdx) w = Math.max(w, skinWt[getter](i));
+      }
+      if (w < 0.5) continue;
+      var x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      var nearEye = eyeCenters.some(function (c) {
+        var dx = x - c[0], dy = y - c[1], dz = z - c[2];
+        return Math.sqrt(dx * dx + dy * dy + dz * dz) < EYE_PROTECT_RADIUS;
+      });
+      if (nearEye) continue;
+      indices.push(i);
+      origList.push(x, y, z);
+    }
+    entry.faceIndices = indices;
+    entry.faceOrig = new Float32Array(origList);
+  }
+  function applyFaceWeightDedicated(gender, weight) {
+    var entry = cache[gender];
+    if (!entry || !entry.faceIndices) return;
+    var geo = entry.geometry;
+    var pos = geo.attributes.position;
+    for (var k = 0; k < entry.faceIndices.length; k++) {
+      var idx = entry.faceIndices[k];
+      var ox = entry.faceOrig[k * 3], oy = entry.faceOrig[k * 3 + 1], oz = entry.faceOrig[k * 3 + 2];
+      if (weight === 1) { pos.setXYZ(idx, ox, oy, oz); continue; }
+      var influence = jawInfluence(oy);
+      if (influence <= 0) { pos.setXYZ(idx, ox, oy, oz); continue; }
+      var widthScale = 1 + (weight - 1) * influence;
+      pos.setXYZ(idx, ox * widthScale, oy, oz * (1 + (weight - 1) * influence * 0.4));
+    }
+  }
+
+  // Applies the body-bone blend at `bodyWeight` and the ported jaw-width
+  // face reshape at `faceWeight` — two independent mechanisms, run together.
+  function applyBodyShape(gender, bodyWeight, faceWeight) {
+    var entry = cache[gender];
+    if (!entry || !entry.shapeGroups) return;
+    var geo = entry.geometry;
+    var pos = geo.attributes.position;
+    var orig = entry.shapeOrig;
+    var n = pos.count;
+    var groups = entry.shapeGroups;
+    for (var v = 0; v < n; v++) {
+      var x = orig[v * 3], y = orig[v * 3 + 1], z = orig[v * 3 + 2];
+      for (var g = 0; g < groups.length; g++) {
+        var grp = groups[g];
+        var w = grp.weights[v];
+        if (w <= 0.001) continue;
+        // lerp toward the fully-scaled position by this vertex's fractional
+        // membership `w` (0 = untouched, 1 = fully scaled) — this is what
+        // makes a 50%-torso/50%-arm vertex land halfway between both
+        // groups' effects instead of jumping between them.
+        var c = grp.centroid;
+        if (grp.axis === "xz") {
+          x = x + (c[0] + (x - c[0]) * bodyWeight - x) * w;
+          z = z + (c[2] + (z - c[2]) * bodyWeight - z) * w;
+        } else if (grp.axis === "yz") {
+          y = y + (c[1] + (y - c[1]) * bodyWeight - y) * w;
+          z = z + (c[2] + (z - c[2]) * bodyWeight - z) * w;
+        }
+      }
+      pos.setXYZ(v, x, y, z);
+    }
+    applyFaceWeightDedicated(gender, faceWeight);
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+  }
+
+  function applyBodyWeight(gender, weight) {
+    currentBodyWeight = weight;
+    applyBodyShape(gender, weight, currentFaceWeight);
+  }
+
+  function applyFaceWeight(gender, weight) {
+    currentFaceWeight = weight;
+    applyBodyShape(gender, currentBodyWeight, weight);
+  }
+
+  // Blends one masked region of `srcData` toward `hex`, writing into
+  // `outData` (both same-size ImageData over the same texture). Shared by
+  // hair and skin — each just brings its own mask.
+  //   mode "flat"     -> paint the exact target color (used for "shave",
+  //                      where hue-shifting the ORIGINAL hair's own strand
+  //                      shading into skin would leave visible streaks).
+  //   mode "absolute" -> replace hue/saturation but keep each pixel's own
+  //                      luminance untouched (used for hair color — hair's
+  //                      whole natural luminance range is already dark-ish,
+  //                      so this reads fine and preserves strand shading).
+  //   mode "ratio"    -> also replace luminance, not just hue/saturation,
+  //                      but keep each pixel's shading as a RATIO relative
+  //                      to `refLum` rather than replacing it outright —
+  //                      preserves highlights/shadow contouring while still
+  //                      actually moving the overall tone toward the target.
+  //                      Needed for skin specifically: light-vs-dark IS the
+  //                      main thing "skin tone" means, and "absolute" mode
+  //                      keeps the face's own naturally-bright luminance no
+  //                      matter how dark a swatch is picked — confirmed by
+  //                      screenshot, a very dark tone barely changed anything.
+  function blendMaskedRegion(outData, srcData, maskData, hex, mode, refLum) {
     var target = hexToRgb(hex);
     var thsl = rgbToHsl(target.r, target.g, target.b);
-    var sD = src.data, mD = mask.data, oD = out.data;
+    var sD = srcData.data, mD = maskData.data, oD = outData.data;
     for (var i = 0; i < sD.length; i += 4) {
       var m = mD[i] / 255; // grayscale mask stored in R channel
       if (m < 0.04) continue;
-      var r = sD[i], g = sD[i + 1], b = sD[i + 2];
       var rgb;
-      if (shave) {
-        // A hair style accessory is covering this area (e.g. a mohawk's
-        // shaved sides) — paint the baked scalp as skin directly, rather
-        // than hue-shifting hair's own strand shading into skin, which
-        // would leave visible dark/light streaks where hair used to be.
+      if (mode === "flat") {
         rgb = [target.r, target.g, target.b];
+      } else if (mode === "ratio") {
+        // A plain multiplicative ratio blew light presets out to near-pure
+        // white; a plain additive shift still did for a genuinely pale
+        // target, since the face's own highlight pixels are already close
+        // to white before any shift (confirmed by screenshot both times).
+        // Fix: a screen/multiply hybrid — lightening approaches white
+        // asymptotically (screen blend) and darkening approaches black
+        // asymptotically (multiply blend), so neither direction can ever
+        // clip, however extreme the target or however bright/dark the
+        // pixel already was — no clamping needed, the math can't overflow.
+        var pxLum = rgbToHsl(sD[i], sD[i + 1], sD[i + 2])[2];
+        var delta = thsl[2] - refLum;
+        var newLum = delta >= 0 ? 1 - (1 - pxLum) * (1 - delta) : pxLum * (1 + delta);
+        rgb = hslToRgb(thsl[0], thsl[1], newLum);
       } else {
-        var lum = rgbToHsl(r, g, b)[2];
+        var lum = rgbToHsl(sD[i], sD[i + 1], sD[i + 2])[2];
         rgb = hslToRgb(thsl[0], thsl[1], lum);
       }
       oD[i] = sD[i] + (rgb[0] - sD[i]) * m;
       oD[i + 1] = sD[i + 1] + (rgb[1] - sD[i + 1]) * m;
       oD[i + 2] = sD[i + 2] + (rgb[2] - sD[i + 2]) * m;
     }
+  }
+
+  // Rebuilds the whole baked texture from the model's untouched original
+  // (entry.sourceData) each time, layering hair then skin on top — always
+  // from the original, never from a previous recolor, so repeated color
+  // changes never compound/drift.
+  function rebuildTexture(gender) {
+    var entry = cache[gender];
+    if (!entry || !entry.sourceData) return;
+    var src = entry.sourceData;
+    var w = src.width, h = src.height;
+    var out = new ImageData(new Uint8ClampedArray(src.data), w, h);
+
+    if (entry.hairMaskData) {
+      var shaveOn = !!HAIR_STYLE_SHAVE[currentHairStyle];
+      var hairHex = shaveOn ? (currentSkinHex || getSkinHex(gender)) : currentHairHex;
+      blendMaskedRegion(out, src, entry.hairMaskData, hairHex, shaveOn ? "flat" : "absolute");
+    }
+    if (entry.skinMaskData && currentSkinHex) {
+      var naturalRgb = hexToRgb(getSkinHex(gender));
+      var naturalSkinLum = rgbToHsl(naturalRgb.r, naturalRgb.g, naturalRgb.b)[2];
+      blendMaskedRegion(out, src, entry.skinMaskData, currentSkinHex, "ratio", naturalSkinLum);
+    }
+
     var canvas = document.createElement("canvas");
     canvas.width = w; canvas.height = h;
     canvas.getContext("2d").putImageData(out, 0, 0);
@@ -493,8 +1151,8 @@
     tex.encoding = THREE.sRGBEncoding;
     tex.needsUpdate = true;
 
-    if (entry.hairTexture) entry.hairTexture.dispose();
-    entry.hairTexture = tex;
+    if (entry.bakedTexture) entry.bakedTexture.dispose();
+    entry.bakedTexture = tex;
     entry.material.map = tex;
     entry.material.needsUpdate = true;
   }
@@ -511,18 +1169,28 @@
       function (gltf) {
         var root = gltf.scene;
         var material = null;
+        var meshObj = null;
         var headBone = null;
+        var hipsBone = null;
         root.traverse(function (node) {
           if (node.isMesh) {
             node.castShadow = true;
             node.receiveShadow = true;
-            if (!material) material = node.material;
+            if (!material) { material = node.material; meshObj = node; }
           }
           if (node.isBone && node.name === "Head") headBone = node;
+          if (node.isBone && node.name === "Hips") hipsBone = node;
         });
-        cache[gender] = { root: root, material: material, originalMap: material.map, headBone: headBone };
+        cache[gender] = { root: root, material: material, originalMap: material.map, headBone: headBone, hipsBone: hipsBone, geometry: meshObj.geometry, skeleton: meshObj.skeleton, bindMatrix: meshObj.bindMatrix };
+        cache[gender].mixer = new THREE.AnimationMixer(root);
+        computeHairBump(gender);
+        computeBodyShapeGroups(gender);
+        computeFaceWeightGroup(gender);
+        applyBodyShape(gender, currentBodyWeight, currentFaceWeight);
         placeModel(root);
         rebuildHairAccessory(gender);
+        rebuildOutfit(gender);
+        applyAnimation(gender, currentAnimation);
 
         // prep source + mask pixel data in the background, then apply current hair color
         var c = document.createElement("canvas");
@@ -532,8 +1200,19 @@
         cache[gender].sourceData = c.getContext("2d").getImageData(0, 0, c.width, c.height);
 
         loadImageData(HAIR_MASKS[gender], function (maskData) {
-          cache[gender].maskData = maskData;
+          cache[gender].hairMaskData = maskData;
           refreshBakedHair(gender);
+        });
+        loadImageData(SKIN_MASKS[gender], function (maskData) {
+          cache[gender].skinMaskData = maskData;
+          // cosmetic only: show this model's own natural tone as the
+          // picker's starting point, but don't touch currentSkinHex —
+          // leave the texture untouched until the user actually picks one.
+          if (!currentSkinHex) {
+            var skinInput = document.getElementById("col-skin");
+            if (skinInput) skinInput.value = getSkinHex(gender);
+          }
+          rebuildTexture(gender);
         });
       },
       undefined,
@@ -569,6 +1248,310 @@
   btnMale.addEventListener("click", function () { setGender("male"); });
   btnFemale.addEventListener("click", function () { setGender("female"); });
 
+  // ---------- match a photo (selfie or upload) ----------
+  // The actual vision analysis happens server-side (serve.mjs's
+  // /api/analyze-photo) so the OpenAI key lives in a .env.local file on
+  // disk, never in this page's JS — anyone who opens devtools on a page
+  // that embeds an API key directly can read it back out and use it
+  // themselves. This page only ever talks to its own local server.
+  var video = document.getElementById("selfie-video");
+  var photoPreview = document.getElementById("photo-preview");
+  var btnCapture = document.getElementById("btn-capture");
+  var btnAnalyze = document.getElementById("btn-analyze");
+  var photoStatus = document.getElementById("photo-status");
+  var currentPhotoDataUrl = null;
+  var localSkinToneHex = null; // measured directly from the photo's own pixels — see extractSkinToneFromCanvas
+  var mediaStream = null;
+
+  function setPhotoStatus(msg, isError) {
+    photoStatus.textContent = msg || "";
+    photoStatus.classList.toggle("error", !!isError);
+  }
+
+  function stopCamera() {
+    if (mediaStream) { mediaStream.getTracks().forEach(function (t) { t.stop(); }); mediaStream = null; }
+    video.style.display = "none";
+    btnCapture.style.display = "none";
+  }
+
+  // Downscale to a max dimension before sending — a full-resolution phone
+  // photo is both slower to upload and unnecessary for this: the model
+  // only needs enough detail to judge skin/hair color and hair shape.
+  // Passes the canvas too (not just the dataURL) so the caller can also run
+  // real pixel measurement on it — see extractSkinToneFromCanvas below.
+  function fileToResizedDataUrl(source, cb) {
+    var img = new Image();
+    img.onload = function () {
+      var maxDim = 512;
+      var scale = Math.min(1, maxDim / Math.max(img.width, img.height));
+      var c = document.createElement("canvas");
+      c.width = Math.round(img.width * scale);
+      c.height = Math.round(img.height * scale);
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      cb(c.toDataURL("image/jpeg", 0.85), c);
+    };
+    img.src = source;
+  }
+
+  // The AI vision call only ever DESCRIBES a color in words from its general
+  // impression of the photo — inherently approximate, the same way asking a
+  // person "roughly what hex is that skin tone" would be. For an actual
+  // close match, measure it directly: classify each pixel as skin-colored
+  // or not, and take the most common resulting color (not just the mean —
+  // see extractSkinToneFromCanvas). Restricted to the photo's own center
+  // box, since a typical selfie/headshot has the face roughly centered —
+  // this keeps most of the background/clothing out without needing real
+  // face detection (no extra dependency for what's still just "find one
+  // region's color").
+  //
+  // First version classified by r>g/lightness/saturation only (the same
+  // heuristic that built the avatar's own skin masks, where it was matched
+  // against known texture regions). On a real photo with a khaki/olive
+  // background, that background PASSED the check (r slightly > g, moderate
+  // saturation) and dominated the average — the character came out
+  // sickly yellow-green (caught by screenshot, not assumed). The actual
+  // discriminator between real skin and a yellow/olive/green background
+  // is HUE, not r-vs-g: measured real skin-tone swatches cluster at
+  // 20-36° hue; a khaki background measured at 50-55° — a clean gap.
+  // Switched the classifier to a hue band instead.
+  function isSkinPixel(r, g, b) {
+    var hsl = rgbToHsl(r, g, b);
+    var hueDeg = hsl[0] * 360, sat = hsl[1], light = hsl[2];
+    return hueDeg >= 4 && hueDeg <= 46 && sat >= 0.12 && light >= 0.15 && light <= 0.92;
+  }
+  // Most-common-color, not mean: even a fairly clean hue band can still let
+  // a few stray pixels through (a shadow, a lip edge, JPEG ringing at an
+  // edge) — those would still skew a plain average. Quantizing into coarse
+  // buckets and taking the biggest one finds the dominant skin color
+  // actually present, which a handful of outliers can't drag around the
+  // way they can a mean.
+  // Still not matching on a real photo after the hue-band fix — traced it
+  // to a second, separate bug in how the matched pixels were combined, not
+  // the classifier: fine-grained histogram buckets (16 per channel) favor
+  // FLAT, uniform color over naturally-shaded skin. A real face's skin
+  // tone varies continuously (shading across cheek/nose/forehead), so its
+  // matching pixels spread across dozens of adjacent buckets — while a
+  // flat, uniformly-lit background patch concentrates into just one or two
+  // buckets and can end up with a higher SINGLE-bucket count than any
+  // individual skin bucket, despite skin being the clear majority of
+  // matched pixels overall. The exact opposite of what "most common
+  // color" should mean. Fixed by taking the per-channel MEDIAN across all
+  // matched pixels instead — robust to outliers the same way a histogram
+  // mode is meant to be, but without rewarding flatness over quantity.
+  function median(arr) {
+    arr.sort(function (a, b) { return a - b; });
+    return arr[Math.floor(arr.length / 2)];
+  }
+  // A fixed center-box assumed the face would always land in roughly the
+  // same spot — it doesn't for every photo (different framing, aspect
+  // ratio, how someone holds their phone), so it kept sampling background
+  // or hair instead of face depending on the shot. Fixed properly this
+  // time: find the face LOCATION first, don't assume it, by scanning the
+  // whole photo for where skin-colored pixels actually cluster densely.
+  // A real face is the largest dense, contiguous patch of skin-colored
+  // pixels in almost any normal selfie/portrait — a stray hand or sliver
+  // of neck elsewhere in frame is small by comparison — so the densest
+  // region is a reliable stand-in for "the face" without needing a real
+  // face-detection model/dependency for what a density scan already solves.
+  function extractSkinToneFromCanvas(canvas) {
+    var ctx = canvas.getContext("2d");
+    var w = canvas.width, h = canvas.height;
+    var full = ctx.getImageData(0, 0, w, h).data;
+
+    var CELLS = 12;
+    var cellW = Math.ceil(w / CELLS), cellH = Math.ceil(h / CELLS);
+    var counts = new Array(CELLS * CELLS).fill(0);
+    for (var y = 0; y < h; y++) {
+      for (var x = 0; x < w; x++) {
+        var idx = (y * w + x) * 4;
+        if (isSkinPixel(full[idx], full[idx + 1], full[idx + 2])) {
+          var cx = Math.min(CELLS - 1, Math.floor(x / cellW));
+          var cy = Math.min(CELLS - 1, Math.floor(y / cellH));
+          counts[cy * CELLS + cx]++;
+        }
+      }
+    }
+
+    // Slide a 2x2-cell window over the density grid — a window, not a
+    // single cell, so the sampled region is big enough to get a solid
+    // pixel count even when the densest single cell sits right at the
+    // edge of the face — and keep whichever position scores highest.
+    var bestScore = -1, bestCx = 0, bestCy = 0;
+    for (var gy = 0; gy < CELLS - 1; gy++) {
+      for (var gx = 0; gx < CELLS - 1; gx++) {
+        var score = counts[gy * CELLS + gx] + counts[gy * CELLS + gx + 1] +
+                    counts[(gy + 1) * CELLS + gx] + counts[(gy + 1) * CELLS + gx + 1];
+        if (score > bestScore) { bestScore = score; bestCx = gx; bestCy = gy; }
+      }
+    }
+    if (bestScore < 150) return null; // no dense enough skin cluster anywhere — face may not be visible; fall back to the AI's estimate instead
+
+    var x0 = bestCx * cellW, y0 = bestCy * cellH;
+    var x1 = Math.min(w, x0 + cellW * 2), y1 = Math.min(h, y0 + cellH * 2);
+    var rs = [], gs = [], bs = [];
+    for (var yy = y0; yy < y1; yy++) {
+      for (var xx = x0; xx < x1; xx++) {
+        var i2 = (yy * w + xx) * 4;
+        var r = full[i2], g = full[i2 + 1], b = full[i2 + 2];
+        if (!isSkinPixel(r, g, b)) continue;
+        rs.push(r); gs.push(g); bs.push(b);
+      }
+    }
+    if (rs.length < 100) return null;
+    var avg = [median(rs), median(gs), median(bs)];
+    return "#" + avg.map(function (v) { return v.toString(16).padStart(2, "0"); }).join("");
+  }
+
+  function showPhotoPreview(dataUrl, canvas) {
+    currentPhotoDataUrl = dataUrl;
+    photoPreview.src = dataUrl;
+    photoPreview.style.display = "block";
+    eyedropperHint.style.display = "block";
+    btnAnalyze.style.display = "block";
+    localSkinToneHex = canvas ? extractSkinToneFromCanvas(canvas) : null;
+    setPhotoStatus(localSkinToneHex ? "Skin tone measured directly from your photo. Or click your skin above to pick it exactly." : "");
+  }
+
+  document.getElementById("btn-selfie").addEventListener("click", function () {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setPhotoStatus("Camera not available in this browser.", true);
+      return;
+    }
+    navigator.mediaDevices.getUserMedia({ video: { facingMode: "user" } }).then(function (stream) {
+      mediaStream = stream;
+      video.srcObject = stream;
+      video.style.display = "block";
+      eyedropperHint.style.display = "block";
+      btnCapture.style.display = "block";
+      photoPreview.style.display = "none";
+      btnAnalyze.style.display = "none";
+      setPhotoStatus("");
+    }).catch(function (err) {
+      setPhotoStatus("Camera access denied or unavailable: " + err.message, true);
+    });
+  });
+
+  // ---------- eyedropper: pick the exact pixel the user clicks ----------
+  // Requested directly after the automatic classifier still didn't
+  // satisfy: "pick the same color of my skin tone... can you do that?".
+  // This sidesteps the whole classifier/background problem entirely — no
+  // hue band, no median, nothing to fool — by sampling the literal pixel
+  // under the user's own click, on either the LIVE video feed (true real
+  // time, not a captured still) or the captured/uploaded preview. A person
+  // pointing at their own cheek is the one thing that can't misfire the
+  // way an automatic guess can.
+  var eyedropperHint = document.getElementById("eyedropper-hint");
+  function pickColorAtClick(mediaEl, isVideo, clientX, clientY) {
+    var rect = mediaEl.getBoundingClientRect();
+    var nativeW = isVideo ? mediaEl.videoWidth : mediaEl.naturalWidth;
+    var nativeH = isVideo ? mediaEl.videoHeight : mediaEl.naturalHeight;
+    if (!nativeW || !nativeH) return null;
+    var px = Math.round(((clientX - rect.left) / rect.width) * nativeW);
+    var py = Math.round(((clientY - rect.top) / rect.height) * nativeH);
+    var c = document.createElement("canvas");
+    c.width = nativeW; c.height = nativeH;
+    c.getContext("2d").drawImage(mediaEl, 0, 0, nativeW, nativeH);
+    // average a small box around the click, not one raw pixel — a single
+    // pixel can land on camera sensor noise or a JPEG block edge.
+    var half = 4;
+    var x0 = Math.max(0, px - half), y0 = Math.max(0, py - half);
+    var x1 = Math.min(nativeW, px + half), y1 = Math.min(nativeH, py + half);
+    var data = c.getContext("2d").getImageData(x0, y0, x1 - x0, y1 - y0).data;
+    var sr = 0, sg = 0, sb = 0, n = 0;
+    for (var i = 0; i < data.length; i += 4) { sr += data[i]; sg += data[i + 1]; sb += data[i + 2]; n++; }
+    if (!n) return null;
+    var avg = [Math.round(sr / n), Math.round(sg / n), Math.round(sb / n)];
+    return "#" + avg.map(function (v) { return v.toString(16).padStart(2, "0"); }).join("");
+  }
+  function handleEyedropperClick(mediaEl, isVideo) {
+    return function (e) {
+      var hex = pickColorAtClick(mediaEl, isVideo, e.clientX, e.clientY);
+      if (!hex) return;
+      localSkinToneHex = hex; // takes priority over the AI's estimate too, same as the automatic measurement did
+      currentSkinHex = hex;
+      document.getElementById("col-skin").value = hex;
+      rebuildTexture(currentGender);
+      setPhotoStatus("Picked " + hex + " from where you clicked — applied to the character.");
+    };
+  }
+  video.addEventListener("click", handleEyedropperClick(video, true));
+  photoPreview.addEventListener("click", handleEyedropperClick(photoPreview, false));
+
+  btnCapture.addEventListener("click", function () {
+    var c = document.createElement("canvas");
+    c.width = video.videoWidth; c.height = video.videoHeight;
+    c.getContext("2d").drawImage(video, 0, 0);
+    stopCamera();
+    fileToResizedDataUrl(c.toDataURL("image/jpeg", 0.9), showPhotoPreview);
+  });
+
+  var fileInput = document.getElementById("file-photo");
+  document.getElementById("btn-upload").addEventListener("click", function () {
+    stopCamera();
+    fileInput.click();
+  });
+  fileInput.addEventListener("change", function (e) {
+    var file = e.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function (ev) { fileToResizedDataUrl(ev.target.result, showPhotoPreview); };
+    reader.readAsDataURL(file);
+  });
+
+  // Applies one AI result to every control it covers, reusing the exact
+  // same functions the manual controls call — never duplicating that logic.
+  // Height/outfit/animation aren't touched: there's no reliable way to
+  // judge a person's real height from a photo with no size reference, and
+  // outfit/animation aren't really "what you look like" traits to match.
+  function applyPhotoResult(result) {
+    // A real measurement from this exact photo's own pixels beats the AI's
+    // text description of a color every time it's available — only fall
+    // back to the AI's estimate when too little of the photo matched the
+    // skin classifier to trust (see extractSkinToneFromCanvas).
+    currentSkinHex = localSkinToneHex || result.skinToneHex || currentSkinHex;
+    document.getElementById("col-skin").value = currentSkinHex || getSkinHex(currentGender);
+    currentHairHex = result.hairColorHex || currentHairHex;
+    document.getElementById("col-hair").value = currentHairHex;
+    currentHairStyle = result.hairStyle;
+    document.getElementById("sel-hairstyle").value = currentHairStyle;
+    currentBodyWeight = result.bodyWeight;
+    document.getElementById("rng-bodyweight").value = currentBodyWeight;
+    currentFaceWeight = result.faceWeight;
+    document.getElementById("rng-faceweight").value = currentFaceWeight;
+
+    setGender(result.genderGuess);
+    // Covers both cases at once: if setGender just kicked off a fresh
+    // model load, these no-op harmlessly (that load's own callback applies
+    // all the state above once it's ready); if the target gender was
+    // already loaded/cached, setGender's early-return means nothing else
+    // would apply this new state, so these do the real work.
+    refreshBakedHair(result.genderGuess);
+    rebuildHairAccessory(result.genderGuess);
+    applyBodyShape(result.genderGuess, result.bodyWeight, result.faceWeight);
+  }
+
+  btnAnalyze.addEventListener("click", function () {
+    if (!currentPhotoDataUrl) return;
+    btnAnalyze.disabled = true;
+    setPhotoStatus("Analyzing photo…");
+    fetch("/api/analyze-photo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageDataUrl: currentPhotoDataUrl })
+    }).then(function (res) {
+      return res.json().then(function (body) { return { ok: res.ok, body: body }; });
+    }).then(function (r) {
+      btnAnalyze.disabled = false;
+      if (!r.ok) { setPhotoStatus(r.body.error || "Analysis failed.", true); return; }
+      applyPhotoResult(r.body);
+      var skinNote = localSkinToneHex ? "skin tone measured directly from your photo" : "skin tone estimated by AI (couldn't measure enough matching pixels)";
+      setPhotoStatus("Applied — hair style, hair color, and build updated to match; " + skinNote + ".");
+    }).catch(function (err) {
+      btnAnalyze.disabled = false;
+      setPhotoStatus("Request failed: " + err.message, true);
+    });
+  });
+
   // Only styles that deliberately expose scalp (currently just Punk's
   // shaved-sides mohawk) need the baked hair "shaved" to skin underneath.
   // Tried shaving for every style first — broke the full-coverage styles
@@ -579,12 +1562,28 @@
   // blends seamlessly under their accessory.
   var HAIR_STYLE_SHAVE = { punk: true };
   function refreshBakedHair(gender) {
-    if (HAIR_STYLE_SHAVE[currentHairStyle]) {
-      applyHairColor(gender, getSkinHex(gender), true);
-    } else {
-      applyHairColor(gender, currentHairHex, false);
-    }
+    rebuildTexture(gender);
+    setHairBumpHidden(gender, !!HAIR_STYLE_SHAVE[currentHairStyle]);
   }
+
+  var skinInput = document.getElementById("col-skin");
+  skinInput.addEventListener("input", function (e) {
+    currentSkinHex = e.target.value;
+    rebuildTexture(currentGender);
+  });
+
+  var skinSwatchWrap = document.getElementById("skin-swatches");
+  SKIN_PRESETS.forEach(function (hex) {
+    var b = document.createElement("button");
+    b.style.background = hex;
+    b.title = hex;
+    b.addEventListener("click", function () {
+      currentSkinHex = hex;
+      skinInput.value = hex;
+      rebuildTexture(currentGender);
+    });
+    skinSwatchWrap.appendChild(b);
+  });
 
   var hairInput = document.getElementById("col-hair");
   hairInput.addEventListener("input", function (e) {
@@ -613,9 +1612,29 @@
     rebuildHairAccessory(currentGender);
   });
 
+  document.getElementById("sel-outfit").addEventListener("change", function (e) {
+    currentOutfit = e.target.value;
+    rebuildOutfit(currentGender);
+  });
+
+  document.getElementById("sel-animation").addEventListener("change", function (e) {
+    currentAnimation = e.target.value;
+    applyAnimation(currentGender, currentAnimation);
+  });
+
   document.getElementById("rng-height").addEventListener("input", function (e) {
     currentHeight = parseFloat(e.target.value);
     if (currentModel) currentModel.scale.setScalar(currentHeight);
+  });
+
+  document.getElementById("rng-bodyweight").addEventListener("input", function (e) {
+    currentBodyWeight = parseFloat(e.target.value);
+    applyBodyWeight(currentGender, currentBodyWeight);
+  });
+
+  document.getElementById("rng-faceweight").addEventListener("input", function (e) {
+    currentFaceWeight = parseFloat(e.target.value);
+    applyFaceWeight(currentGender, currentFaceWeight);
   });
 
   var autorotateBtn = document.getElementById("autorotate");
@@ -626,8 +1645,12 @@
   });
 
   // ---------- render loop ----------
+  var clock = new THREE.Clock();
   function animate() {
     requestAnimationFrame(animate);
+    var delta = clock.getDelta();
+    var entry = cache[currentGender];
+    if (entry && entry.mixer) entry.mixer.update(delta);
     if (autoRotate && !dragging) {
       theta += 0.004;
       updateCamera();
