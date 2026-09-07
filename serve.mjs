@@ -50,13 +50,23 @@ const TYPES = {
 // ("dreads" was added to the app as its own real hairstyle option, but this
 // list — and the sanitizer's whitelist further down — never got updated to
 // match, so a real dreadlocked photo could never actually be matched to it.)
+// "casual"/"casual2"/"suit" are all "plain short hair" at a glance, which
+// made them unstable in practice — the same ordinary short haircut with no
+// strong distinguishing feature could plausibly read as any of the three,
+// so re-running the exact same photo could flip between them (verified
+// directly: three separate runs on the same test photo came back casual,
+// then casual2, then suit). Sharpened each to a specific, checkable visual
+// feature instead of a vague overall impression, and added an explicit
+// "default is the right answer more often than you'd think" rule so a
+// plain cut with none of those specific features lands on "default"
+// consistently instead of getting forced into a three-way guess.
 const HAIR_STYLE_DESCRIPTIONS = `
-- "default": keep the body's own default short hair as-is. Use this whenever the photo's hairstyle doesn't clearly match one of the options below, or for any long/updo/braided/curly-voluminous style none of these cover (aside from "dreads" below, this app only has short-to-medium men's-style cuts available as real 3D swaps).
-- "casual": short, slightly tousled/messy hair with natural volume on top.
-- "casual2": short hair, side-swept with a defined side part.
-- "adventurer": short-to-medium wavy/textured hair.
-- "beach": short tousled "surfer" textured hair.
-- "suit": short, neat, combed-back professional hair.
+- "default": keep the body's own default short hair as-is. Use this whenever the photo's hairstyle doesn't clearly match one of the options below, or for any long/updo/braided/curly-voluminous style none of these cover (aside from "dreads" below, this app only has short-to-medium men's-style cuts available as real 3D swaps). IMPORTANT: this is the right answer for an ordinary plain short haircut that doesn't clearly show one of the specific features below — don't force a plain cut into "casual"/"casual2"/"suit" just because it's short hair; only pick one of those three when its own specific feature is clearly visible.
+- "casual": hair strands visibly going in multiple different directions (tousled/messy texture), not lying flat or uniform.
+- "casual2": a clearly visible, distinct hard part LINE separating the hair into two sections.
+- "adventurer": short-to-medium hair with visible wave or curl texture throughout.
+- "beach": short tousled hair with a sun-bleached/"surfer" look, often lighter at the tips.
+- "suit": hair lying smooth and flat against the scalp with a combed/slicked-back sheen, no visible texture or volume on top.
 - "king": short hair that is grey/silver/white in color — pick this whenever the person's real hair color is grey/white/silver, regardless of its shape.
 - "punk": shaved sides with a raised mohawk strip down the center — ONLY pick this if the photo clearly shows an actual mohawk.
 - "dreads": gathered dreadlocks/twists pulled back into a bun or ponytail — pick this for dreadlocked, locced, or twisted hair gathered at the back/crown, even if the exact length or bun position doesn't match precisely.
@@ -150,6 +160,13 @@ Respond with ONLY valid JSON, no markdown, no explanation. Fill "observations" F
         body: JSON.stringify({
           model: "gpt-4o-mini",
           response_format: { type: "json_object" },
+          // Low, not zero — this is factual extraction (a hairstyle/color
+          // either matches or it doesn't), not creative writing, and the
+          // default temperature was visibly part of why re-running the same
+          // exact photo could land on a different hairStyle each time
+          // (verified directly: default temperature flipped between 3
+          // different styles across 3 runs on one unchanged photo).
+          temperature: 0.2,
           max_tokens: 550, // bumped from 400 to leave room for the new "observations" field ahead of the structured ones
           messages: [
             {
@@ -218,7 +235,20 @@ http.createServer((req, res) => {
   fs.readFile(filePath, (err, data) => {
     if (err) { res.writeHead(404); res.end("not found"); return; }
     const ext = path.extname(filePath);
-    res.writeHead(200, { "Content-Type": TYPES[ext] || "application/octet-stream" });
+    // No caching, ever — this app gets edited and reloaded constantly
+    // during development, and index.html had no Cache-Control or
+    // ETag/Last-Modified validator at all before this, so a plain reload
+    // could silently keep serving whatever the browser last cached instead
+    // of the actual current file on disk, with no visible sign anything was
+    // stale. Small models (.glb/.bin) are the one exception — they're large,
+    // never change without also changing their filename/path in practice,
+    // and re-fetching them on every single reload would make iterating on
+    // index.html itself noticeably slower for no real benefit.
+    const cacheable = [".glb", ".bin"].includes(ext);
+    res.writeHead(200, {
+      "Content-Type": TYPES[ext] || "application/octet-stream",
+      "Cache-Control": cacheable ? "public, max-age=3600" : "no-store"
+    });
     res.end(data);
   });
 }).listen(PORT, () => {

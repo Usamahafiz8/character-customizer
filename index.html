@@ -249,6 +249,11 @@
     </select>
   </div>
 
+  <div class="row"><span>Reactions</span></div>
+  <div class="photo-row">
+    <button class="photo-btn" id="btn-angry">😠 Angry</button>
+  </div>
+
   <div class="divider"></div>
 
   <div class="row"><span>Height</span><input type="range" id="rng-height" min="0.85" max="1.15" step="0.01" value="1"></div>
@@ -279,7 +284,15 @@
     female: "models/feminine_skin_mask.png"
   };
   var HAIR_PRESETS = ["#0b0b0b", "#3b2a1e", "#6b4226", "#a85c2c", "#c99a4b", "#8a8a8a", "#e6e6e6", "#c0392b"];
-  var SKIN_PRESETS = ["#ffe0bd", "#f1c27d", "#e0ac81", "#c68642", "#a86b3c", "#8d5524", "#5a3825", "#3b2417"];
+  // Old palette (#ffe0bd/#f1c27d/#c68642/#8d5524/...) was a generic
+  // web-emoji-style skin-tone ramp — a couple of its steps (especially
+  // #f1c27d and #8d5524) lean noticeably more orange/yellow-saturated than
+  // real skin reflectance, closer to a "spray tan" swatch than a photo of
+  // an actual person. Replaced with 8 evenly-spaced points from the Monk
+  // Skin Tone Scale (research-grounded skin-tone reference built from real
+  // photographed skin, not picked by eye) instead of inventing another set
+  // of hex guesses.
+  var SKIN_PRESETS = ["#f6ede4", "#f7ead0", "#eadaba", "#d7bd96", "#a07e56", "#825c43", "#604134", "#292420"];
 
   // ---------- hairstyle geometry: real assets ----------
   // Real hair meshes extracted from Quaternius's "Ultimate Modular
@@ -1029,6 +1042,144 @@
     applyBodyShape(gender, currentBodyWeight, weight);
   }
 
+  // ---------- Angry reaction: brow furrow + mouth open ----------
+  // This rig's face has no clean single-region UV island to key off of
+  // (already established for the skin mask — face texture pixels scatter
+  // across the whole atlas), so region selection here is purely POSITION-
+  // based, same principle as the jaw-width reshape above.
+  // Brow: front-facing (Z > 0.05) Head-bone vertices in a measured Y band
+  // around FACE_Y.brow.
+  // Mouth/lips: this rig has a single mesh/single material — no separate
+  // teeth or tongue geometry (checked directly) — so a full gaping shout
+  // would expose a hollow, textureless gap. Sorting front-facing Head
+  // vertices by how far forward (+Z) they protrude cleanly isolates the
+  // lips from the flatter cheek/jaw around them (measured directly: the
+  // most-protruding vertices in this Y range land in a tight X±0.017
+  // cluster, visibly the lips) — the open amount below is deliberately
+  // modest because of that missing interior geometry, not a full shout.
+  var ANGER_BROW_Y = { lo: 1.755, hi: 1.795 };
+  var ANGER_MOUTH_Y = { lo: 1.6, hi: 1.68 };
+  var ANGER_MOUTH_Z_MIN = 0.12;
+  var ANGER_MOUTH_X_MAX = 0.02;
+  // First version dropped ONLY the tight lip cluster down, leaving the chin
+  // fixed — screenshot evidence: that stretched the lip patch into a thin
+  // dangling strip that read as a protruding tongue, not an open mouth,
+  // because nothing anatomically below the lip (the chin/lower jaw) moved
+  // WITH it. Real jaws open by rotating the whole chin down, not by
+  // stretching just the lips — so the "open" half now pulls a much broader
+  // chin region down together with the lower lip, smoothstepped to zero at
+  // FACE_Y.chin so it blends into the fixed jawline instead of tearing.
+  var ANGER_CHIN_Z_MIN = 0.06;
+  var ANGER_CHIN_X_MAX = 0.045;
+
+  function computeAngerRegions(gender) {
+    var entry = cache[gender];
+    var geo = entry.geometry, skeleton = entry.skeleton;
+    var pos = geo.attributes.position;
+    var skinIdx = geo.attributes.skinIndex;
+    var skinWt = geo.attributes.skinWeight;
+    var boneNameList = skeleton.bones.map(function (b) { return b.name; });
+    var headBoneIdx = boneNameList.indexOf("Head");
+
+    var browIdx = [], browWeight = [];
+    var lipIdx = [], lipYs = [];
+    var chinCandidates = []; // {i, x, y, z} — resolved into indices/weights once lipMidY is known
+    var yMid = (ANGER_BROW_Y.lo + ANGER_BROW_Y.hi) / 2;
+    var yHalf = (ANGER_BROW_Y.hi - ANGER_BROW_Y.lo) / 2;
+    for (var i = 0; i < pos.count; i++) {
+      var w = 0;
+      for (var k = 0; k < 4; k++) {
+        var getter = VEC4_GETTERS[k];
+        if (skinIdx[getter](i) === headBoneIdx) w = Math.max(w, skinWt[getter](i));
+      }
+      if (w < 0.5) continue;
+      var x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      if (z > 0.05 && y >= ANGER_BROW_Y.lo && y <= ANGER_BROW_Y.hi) {
+        // Falloff both vertically (peak mid-band, fading at the eyebrow's
+        // own top/bottom edge) and horizontally (peak near the inner
+        // brow/nose bridge, fading toward the temple) — a uniform push
+        // looked like the whole forehead sank, not eyebrows lowering.
+        var vFall = 1 - Math.min(1, Math.abs(y - yMid) / yHalf);
+        var hFall = 1 - smoothstep(Math.abs(x) / 0.067);
+        browIdx.push(i);
+        browWeight.push(vFall * hFall);
+      }
+      if (z >= ANGER_MOUTH_Z_MIN && y >= ANGER_MOUTH_Y.lo && y <= ANGER_MOUTH_Y.hi && Math.abs(x) <= ANGER_MOUTH_X_MAX) {
+        lipIdx.push(i);
+        lipYs.push(y);
+      }
+      if (z >= ANGER_CHIN_Z_MIN && y >= FACE_Y.chin && y <= ANGER_MOUTH_Y.hi && Math.abs(x) <= ANGER_CHIN_X_MAX) {
+        chinCandidates.push({ i: i, y: y });
+      }
+    }
+    var lipMidY = lipYs.length ? (Math.min.apply(null, lipYs) + Math.max.apply(null, lipYs)) / 2 : 0;
+
+    var chinIdx = [], chinWeight = [];
+    var chinSpan = lipMidY - FACE_Y.chin;
+    chinCandidates.forEach(function (c) {
+      if (c.y > lipMidY) return; // above the lip midline is the lip cluster's own job, not chin's
+      chinIdx.push(c.i);
+      chinWeight.push(smoothstep((c.y - FACE_Y.chin) / chinSpan));
+    });
+
+    entry.angerBrowIndices = browIdx;
+    entry.angerBrowWeight = browWeight;
+    entry.angerLipIndices = lipIdx;
+    entry.angerLipIsUpper = lipYs.map(function (y) { return y > lipMidY; });
+    entry.angerChinIndices = chinIdx;
+    entry.angerChinWeight = chinWeight;
+  }
+
+  // amount: 0 = neutral, 1 = fully angry. Always re-derives from the current
+  // body/face-weight baseline first (applyBodyShape) — anger and the weight
+  // sliders touch overlapping vertices (both live in the head/jaw region),
+  // so layering anger on top of whatever the LAST anger call left behind
+  // would drift over repeated triggers; recomputing from the real baseline
+  // every call can't, same "rebuild from the original, never compound" rule
+  // the baked-texture rebuild follows.
+  function applyAnger(gender, amount) {
+    var entry = cache[gender];
+    if (!entry || !entry.angerBrowIndices) return;
+    applyBodyShape(gender, currentBodyWeight, currentFaceWeight);
+    if (amount <= 0) return;
+    var geo = entry.geometry;
+    var pos = geo.attributes.position;
+
+    for (var k = 0; k < entry.angerBrowIndices.length; k++) {
+      var idx = entry.angerBrowIndices[k];
+      var w = entry.angerBrowWeight[k] * amount;
+      if (w <= 0) continue;
+      var ox = pos.getX(idx), oy = pos.getY(idx), oz = pos.getZ(idx);
+      pos.setXYZ(idx, ox, oy - 0.045 * w, oz + 0.012 * w);
+    }
+    // This rig has no interior mouth geometry (checked — single mesh,
+    // single material), so there's a hard ceiling on how far "open" can go
+    // before it needs topology that doesn't exist. First fix for the lip
+    // cluster alone still read as a protruding tongue (screenshot evidence)
+    // — a real jaw opens by the whole chin dropping WITH the lower lip, not
+    // the lip stretching alone, so the broader chin region below (computed
+    // in computeAngerRegions, smoothstepped to zero at FACE_Y.chin) drops
+    // together with it here.
+    for (var m = 0; m < entry.angerLipIndices.length; m++) {
+      var idx2 = entry.angerLipIndices[m];
+      var ox2 = pos.getX(idx2), oy2 = pos.getY(idx2), oz2 = pos.getZ(idx2);
+      if (entry.angerLipIsUpper[m]) {
+        pos.setXYZ(idx2, ox2, oy2 + 0.004 * amount, oz2);
+      } else {
+        pos.setXYZ(idx2, ox2, oy2 - 0.016 * amount, oz2 - 0.002 * amount);
+      }
+    }
+    for (var c = 0; c < entry.angerChinIndices.length; c++) {
+      var idx3 = entry.angerChinIndices[c];
+      var cw = entry.angerChinWeight[c] * amount;
+      if (cw <= 0) continue;
+      var ox3 = pos.getX(idx3), oy3 = pos.getY(idx3), oz3 = pos.getZ(idx3);
+      pos.setXYZ(idx3, ox3, oy3 - 0.016 * cw, oz3 - 0.002 * cw);
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+  }
+
   // Blends one masked region of `srcData` toward `hex`, writing into
   // `outData` (both same-size ImageData over the same texture). Shared by
   // hair and skin — each just brings its own mask.
@@ -1052,6 +1203,28 @@
   function blendMaskedRegion(outData, srcData, maskData, hex, mode, refLum) {
     var target = hexToRgb(hex);
     var thsl = rgbToHsl(target.r, target.g, target.b);
+    // HSL saturation is mathematically forced toward 0 as lightness
+    // approaches either 0 or 1, for ANY hue — that's a property of the
+    // color space, not of how "rich" a color actually looks (a genuinely
+    // warm dark brown has far less headroom for r/g/b to spread apart than
+    // a mid-tone does, simply because all three channels are small
+    // numbers). "ratio" mode reuses the target's own saturation at every
+    // pixel's new luminance, so a dark target whose OWN saturation happens
+    // to be on the low side (found by screenshot, not assumed: the darkest
+    // preset in this app's own skin-tone swatches rendered visibly
+    // grey/ashy instead of a rich dark brown) drags the whole face toward
+    // that same flatness, regardless of the individual pixel's own
+    // shading. Floored so a dark (or very light) target can't go below a
+    // believable minimum richness — high-saturation targets already exceed
+    // this and are untouched. This isn't specific to the one preset that
+    // exposed it: any sufficiently dark/light, close-to-neutral target
+    // (a manually-picked hex, or a real photo's own measured tone) would
+    // hit the exact same flattening without this floor. Only applied in
+    // "ratio" mode (skin) — NOT "absolute" (hair), where a true near-black
+    // or grey target is a legitimate, intentional choice (real black hair
+    // is genuinely close to neutral) and flooring its saturation would
+    // inject an unwanted color tint instead of fixing anything.
+    var ratioSat = Math.max(thsl[1], 0.28);
     var sD = srcData.data, mD = maskData.data, oD = outData.data;
     for (var i = 0; i < sD.length; i += 4) {
       var m = mD[i] / 255; // grayscale mask stored in R channel
@@ -1072,7 +1245,7 @@
         var pxLum = rgbToHsl(sD[i], sD[i + 1], sD[i + 2])[2];
         var delta = thsl[2] - refLum;
         var newLum = delta >= 0 ? 1 - (1 - pxLum) * (1 - delta) : pxLum * (1 + delta);
-        rgb = hslToRgb(thsl[0], thsl[1], newLum);
+        rgb = hslToRgb(thsl[0], ratioSat, newLum);
       } else {
         var lum = rgbToHsl(sD[i], sD[i + 1], sD[i + 2])[2];
         rgb = hslToRgb(thsl[0], thsl[1], lum);
@@ -1162,6 +1335,7 @@
         computeHairBump(gender);
         computeBodyShapeGroups(gender);
         computeFaceWeightGroup(gender);
+        computeAngerRegions(gender);
         applyBodyShape(gender, currentBodyWeight, currentFaceWeight);
         placeModel(root);
         resetHairFitDeltas();
@@ -1237,6 +1411,7 @@
   var photoStatus = document.getElementById("photo-status");
   var currentPhotoDataUrl = null;
   var localSkinToneHex = null; // measured directly from the photo's own pixels — see extractSkinToneFromCanvas
+  var localHairColorHex = null; // measured directly from the photo's own pixels — see extractHairColorFromCanvas
   var mediaStream = null;
 
   function setPhotoStatus(msg, isError) {
@@ -1294,10 +1469,31 @@
   // is HUE, not r-vs-g: measured real skin-tone swatches cluster at
   // 20-36° hue; a khaki background measured at 50-55° — a clean gap.
   // Switched the classifier to a hue band instead.
-  function isSkinPixel(r, g, b) {
+  // The light >= 0.15 floor was tuned against one well-lit test photo and
+  // never checked against darker skin tones under normal (not studio)
+  // lighting — checked properly this time with a set of reference skin-tone
+  // swatches (light through very dark) under simulated dim indoor lighting:
+  // medium-dark and darker skin drops BELOW 0.15 lightness at anything
+  // short of bright, direct light (confirmed with real numbers, not just
+  // reasoning: "dark" swatch at a plausible dim-room 0.6x exposure measures
+  // light=0.124, "very dark" at the same dimness measures 0.092 — both
+  // would fail this floor and return "no face found" outright, which is
+  // exactly the reported bug). Fixed with a relaxed second attempt, not by
+  // just lowering the floor globally — a lower floor on the PRIMARY pass
+  // also starts admitting dark hair/wood/leather backgrounds as false
+  // "skin" (checked directly: several of those sit in the same hue/sat
+  // range as skin once you're loose enough about brightness), which would
+  // trade one bug for a different one in the common well-lit case. Instead
+  // `relaxed` only lowers the floor for a FALLBACK pass that only ever
+  // runs after the strict pass already found nothing (see findFaceBox) —
+  // the well-lit case some already works fine keeps using the tight,
+  // already-proven band; only the otherwise-total-failure case gets the
+  // wider, slightly riskier one, which is strictly better than failing.
+  function isSkinPixel(r, g, b, relaxed) {
     var hsl = rgbToHsl(r, g, b);
     var hueDeg = hsl[0] * 360, sat = hsl[1], light = hsl[2];
-    return hueDeg >= 4 && hueDeg <= 46 && sat >= 0.12 && light >= 0.15 && light <= 0.92;
+    var lightFloor = relaxed ? 0.05 : 0.15;
+    return hueDeg >= 4 && hueDeg <= 46 && sat >= 0.12 && light >= lightFloor && light <= 0.92;
   }
   // Most-common-color, not mean: even a fairly clean hue band can still let
   // a few stray pixels through (a shadow, a lip edge, JPEG ringing at an
@@ -1333,47 +1529,164 @@
   // of neck elsewhere in frame is small by comparison — so the densest
   // region is a reliable stand-in for "the face" without needing a real
   // face-detection model/dependency for what a density scan already solves.
-  function extractSkinToneFromCanvas(canvas) {
-    var ctx = canvas.getContext("2d");
-    var w = canvas.width, h = canvas.height;
-    var full = ctx.getImageData(0, 0, w, h).data;
+  // Sampled once per photo and used to reject a candidate face window that
+  // turns out to be mostly background (see findFaceBox) — a real bug found
+  // from an actual user screenshot, not assumed: a warm tan/blush studio
+  // headshot backdrop (the kind portrait photography deliberately picks
+  // because it's flattering against skin) sails straight through the
+  // hue/sat/light skin band — it's not an accidental edge case like the
+  // khaki-background bug, it's a background family specifically chosen to
+  // sit near skin tones. Reproduced directly: a synthetic photo with a
+  // warm-blush backdrop and a real dark-skinned face came back with
+  // skinToneHex exactly equal to the BACKDROP's own color, not the face —
+  // because the backdrop fills most of the frame, so its cells win the
+  // density scan outright even though the actual (smaller) face region also
+  // passes the same hue band.
+  //
+  // First attempt at a fix excluded any background-matching pixel from the
+  // density count DURING the scan itself, at every position — this broke a
+  // previously-correct real photo instead of just fixing the new case
+  // (caught by re-running the full regression set, not assumed fixed):
+  // excluding scattered near-background-toned pixels (a bright highlight on
+  // a cheek, a slightly washed-out patch) shifted which window scored
+  // highest, and the new "winning" window happened to sit lower on the face
+  // — which then also threw off the hair-band sample (it's measured
+  // relative to the winning window's own top edge), turning correct dark
+  // hair into a wrong tan color. Fixed properly instead: leave the
+  // window-scoring scan exactly as it always was (so the normal case is
+  // provably unchanged), and only AFTER picking the best-scoring window,
+  // check whether that specific window's own matching pixels are mostly
+  // close to the background reference — only reject and move on to the
+  // next-best candidate in that specific case, instead of perturbing every
+  // window's score for every photo.
+  function colorDistanceRgb(r1, g1, b1, r2, g2, b2) {
+    var dr = r1 - r2, dg = g1 - g2, db = b1 - b2;
+    return Math.sqrt(dr * dr + dg * dg + db * db);
+  }
+  function sampleBackgroundRgb(full, w, h) {
+    // Small patches in all four corners — far from center, so overwhelmingly
+    // background regardless of how the subject is framed. Median across all
+    // four together, not per-corner, since a vignette/gradient background
+    // can shade one corner noticeably darker than another.
+    var patch = Math.max(4, Math.round(Math.min(w, h) * 0.08));
+    var rs = [], gs = [], bs = [];
+    var corners = [[0, 0], [w - patch, 0], [0, h - patch], [w - patch, h - patch]];
+    corners.forEach(function (c) {
+      for (var yy = c[1]; yy < c[1] + patch; yy++) {
+        for (var xx = c[0]; xx < c[0] + patch; xx++) {
+          var i = (yy * w + xx) * 4;
+          rs.push(full[i]); gs.push(full[i + 1]); bs.push(full[i + 2]);
+        }
+      }
+    });
+    return { r: median(rs), g: median(gs), b: median(bs) };
+  }
+  // BG_MATCH_DIST: how close a pixel needs to be to the background reference
+  // before it's excluded even though it passed the hue-band skin test. Real
+  // face skin (even very light skin) reliably measured 60+ away from these
+  // backdrop tones in the reproduction above (dark face vs. light backdrop
+  // is an extreme case, but the failure this guards against — a LIGHT face
+  // near a LIGHT backdrop of a similar family — is exactly why this isn't
+  // set much higher: better to occasionally under-trust a close match than
+  // repeat the original bug of trusting the backdrop outright.
+  var BG_MATCH_DIST = 45;
 
+  // Pulled out of extractSkinToneFromCanvas so the hair-color measurement
+  // below can reuse the exact same face location — sampling hair color
+  // relative to an INDEPENDENTLY re-detected face box risked the two boxes
+  // disagreeing on a busy photo and the hair sample landing somewhere
+  // random. One face box, shared by both measurements.
+  function scanFaceDensity(full, w, h, relaxed) {
     var CELLS = 12;
     var cellW = Math.ceil(w / CELLS), cellH = Math.ceil(h / CELLS);
     var counts = new Array(CELLS * CELLS).fill(0);
     for (var y = 0; y < h; y++) {
       for (var x = 0; x < w; x++) {
         var idx = (y * w + x) * 4;
-        if (isSkinPixel(full[idx], full[idx + 1], full[idx + 2])) {
+        if (isSkinPixel(full[idx], full[idx + 1], full[idx + 2], relaxed)) {
           var cx = Math.min(CELLS - 1, Math.floor(x / cellW));
           var cy = Math.min(CELLS - 1, Math.floor(y / cellH));
           counts[cy * CELLS + cx]++;
         }
       }
     }
-
-    // Slide a 2x2-cell window over the density grid — a window, not a
-    // single cell, so the sampled region is big enough to get a solid
-    // pixel count even when the densest single cell sits right at the
-    // edge of the face — and keep whichever position scores highest.
-    var bestScore = -1, bestCx = 0, bestCy = 0;
+    // Every 2x2-cell window, sorted best-first (not just the single best
+    // one) — so a winning window that turns out to be background can fall
+    // through to the next-best real candidate instead of the whole scan
+    // just failing outright.
+    var candidates = [];
     for (var gy = 0; gy < CELLS - 1; gy++) {
       for (var gx = 0; gx < CELLS - 1; gx++) {
         var score = counts[gy * CELLS + gx] + counts[gy * CELLS + gx + 1] +
                     counts[(gy + 1) * CELLS + gx] + counts[(gy + 1) * CELLS + gx + 1];
-        if (score > bestScore) { bestScore = score; bestCx = gx; bestCy = gy; }
+        candidates.push({ score: score, cx: gx, cy: gy });
       }
     }
-    if (bestScore < 150) return null; // no dense enough skin cluster anywhere — face may not be visible; fall back to the AI's estimate instead
+    candidates.sort(function (a, b) { return b.score - a.score; });
+    return { candidates: candidates, cellW: cellW, cellH: cellH };
+  }
+  function boxFromCandidate(scan, c, w, h, relaxed) {
+    var x0 = c.cx * scan.cellW, y0 = c.cy * scan.cellH;
+    var x1 = Math.min(w, x0 + scan.cellW * 2), y1 = Math.min(h, y0 + scan.cellH * 2);
+    // `relaxed` travels with the box: extractSkinToneFromCanvas re-filters
+    // pixels inside this box with isSkinPixel too, and if the box was only
+    // found because of the relaxed brightness floor, filtering its own
+    // pixels back down with the STRICT floor would just throw away most of
+    // what the relaxed scan found in the first place, right back to nothing.
+    return { x0: x0, y0: y0, x1: x1, y1: y1, score: c.score, relaxed: !!relaxed };
+  }
+  // A window whose own matching pixels are MOSTLY close to the photo's
+  // background reference is background that happened to pass the skin-hue
+  // test (the studio-backdrop bug), not a real face — reject just that one
+  // candidate and let the caller try the next-best instead.
+  function windowIsMostlyBackground(full, w, h, box, bg) {
+    var total = 0, bgLike = 0;
+    for (var yy = box.y0; yy < box.y1; yy++) {
+      for (var xx = box.x0; xx < box.x1; xx++) {
+        var i = (yy * w + xx) * 4;
+        var r = full[i], g = full[i + 1], b = full[i + 2];
+        if (!isSkinPixel(r, g, b, box.relaxed)) continue;
+        total++;
+        if (colorDistanceRgb(r, g, b, bg.r, bg.g, bg.b) < BG_MATCH_DIST) bgLike++;
+      }
+    }
+    return total === 0 || bgLike / total > 0.5;
+  }
+  function pickFaceCandidate(full, w, h, scan, relaxed, bg, minScore) {
+    for (var i = 0; i < scan.candidates.length; i++) {
+      var c = scan.candidates[i];
+      if (c.score < minScore) break; // sorted best-first — nothing further is worth trying
+      var box = boxFromCandidate(scan, c, w, h, relaxed);
+      if (!windowIsMostlyBackground(full, w, h, box, bg)) return box;
+    }
+    return null;
+  }
+  function findFaceBox(full, w, h) {
+    var bg = sampleBackgroundRgb(full, w, h);
+    var strictBox = pickFaceCandidate(full, w, h, scanFaceDensity(full, w, h, false), false, bg, 150);
+    if (strictBox) return strictBox;
+    // Strict pass found nothing dense enough (or every dense-enough
+    // candidate was background) — try again with a relaxed brightness
+    // floor before giving up (see isSkinPixel for why this is a fallback
+    // and not just a lower floor everywhere). Needs a slightly higher bar
+    // (200 vs 150) since the wider band is more permissive per pixel —
+    // asking for a bit more density helps offset the extra risk of
+    // matching a dark non-skin surface instead of an actual face.
+    return pickFaceCandidate(full, w, h, scanFaceDensity(full, w, h, true), true, bg, 200);
+  }
 
-    var x0 = bestCx * cellW, y0 = bestCy * cellH;
-    var x1 = Math.min(w, x0 + cellW * 2), y1 = Math.min(h, y0 + cellH * 2);
+  function extractSkinToneFromCanvas(canvas, box) {
+    var ctx = canvas.getContext("2d");
+    var w = canvas.width, h = canvas.height;
+    var full = ctx.getImageData(0, 0, w, h).data;
+    var bg = sampleBackgroundRgb(full, w, h);
     var rs = [], gs = [], bs = [];
-    for (var yy = y0; yy < y1; yy++) {
-      for (var xx = x0; xx < x1; xx++) {
+    for (var yy = box.y0; yy < box.y1; yy++) {
+      for (var xx = box.x0; xx < box.x1; xx++) {
         var i2 = (yy * w + xx) * 4;
         var r = full[i2], g = full[i2 + 1], b = full[i2 + 2];
-        if (!isSkinPixel(r, g, b)) continue;
+        if (!isSkinPixel(r, g, b, box.relaxed)) continue;
+        if (colorDistanceRgb(r, g, b, bg.r, bg.g, bg.b) < BG_MATCH_DIST) continue;
         rs.push(r); gs.push(g); bs.push(b);
       }
     }
@@ -1382,23 +1695,118 @@
     return "#" + avg.map(function (v) { return v.toString(16).padStart(2, "0"); }).join("");
   }
 
+  // Skin tone got the "measure real pixels instead of trusting the AI's text
+  // description of a color" treatment early on; hair color never did, and
+  // suffered the exact same kind of mismatch for the exact same reason — an
+  // AI describing a color in words is inherently approximate. Reuses the
+  // already-detected face box (see findFaceBox) as a geometric anchor: in a
+  // normal centered selfie/headshot, the band directly above the forehead
+  // (and a little past each side of the face) is hair far more often than
+  // not, so sample pixels there directly instead of running any color
+  // classifier — hair, unlike skin, has no reliable universal hue band to
+  // filter by (it can be any real-world color, dyed or not).
+  //
+  // Three honest failure modes this has to guard against instead of just
+  // trusting the sample blindly — the third was found the hard way, not
+  // assumed: an early version only checked #1 below, and a synthetic
+  // no-hair test photo (flat khaki background, bald oval "face", no hair
+  // at all) came back with hairHex #ccc591 — that's the khaki BACKGROUND
+  // color, sampled straight out of the "band above the face" and handed
+  // back as if it were a real measurement, because khaki happens to be far
+  // enough from the skin tone to pass the skin-distance check while still
+  // being pure background, not hair.
+  // 1. A high forehead/receding hairline/short crop can mean the "band above
+  //    the face" is still mostly forehead skin, not hair — checked by
+  //    rejecting the sample if it's too close to the already-measured skin
+  //    tone (a real hair color is essentially always a clearly different
+  //    color from skin, even for very dark or very light hair).
+  // 2. The face box can sit near the top of the frame with no room above it
+  //    at all (tight crop, phone held close) — checked by requiring a
+  //    minimum usable band height before sampling anything.
+  // 3. The band above the face can be background, not hair, if there's
+  //    little/no hair to fill it (very short hair, a hat, a shaved head
+  //    that isn't perfectly framed) — checked by independently sampling the
+  //    photo's actual background (the corners, which are essentially always
+  //    background in a normal centered headshot/selfie regardless of what's
+  //    IN the frame) and rejecting the hair-band sample if it's too close to
+  //    THAT reference instead of just checking it against skin.
+  function colorDistance(hexA, hexB) {
+    var a = hexToRgb(hexA), b = hexToRgb(hexB);
+    return colorDistanceRgb(a.r, a.g, a.b, b.r, b.g, b.b);
+  }
+  function extractHairColorFromCanvas(canvas, box, skinHex) {
+    var ctx = canvas.getContext("2d");
+    var w = canvas.width, h = canvas.height;
+    var full = ctx.getImageData(0, 0, w, h).data;
+
+    var faceW = box.x1 - box.x0, faceH = box.y1 - box.y0;
+    var margin = faceW * 0.15;
+    var hx0 = Math.max(0, Math.round(box.x0 - margin));
+    var hx1 = Math.min(w, Math.round(box.x1 + margin));
+    var hy1 = box.y0; // hair band ends where the detected face begins
+    var hy0 = Math.max(0, Math.round(hy1 - faceH * 0.9));
+    if (hy1 - hy0 < 8 || hx1 - hx0 < 8) return null; // no usable room above the face
+
+    var rs = [], gs = [], bs = [];
+    for (var yy = hy0; yy < hy1; yy++) {
+      for (var xx = hx0; xx < hx1; xx++) {
+        var i2 = (yy * w + xx) * 4;
+        rs.push(full[i2]); gs.push(full[i2 + 1]); bs.push(full[i2 + 2]);
+      }
+    }
+    if (rs.length < 60) return null;
+    var avg = [median(rs), median(gs), median(bs)];
+    var hex = "#" + avg.map(function (v) { return v.toString(16).padStart(2, "0"); }).join("");
+    // Too close to the skin tone almost always means this sample is
+    // forehead, not hair (a receding hairline, a very tight crop, or a bald/
+    // shaved head where there's genuinely no hair to measure) — don't
+    // hand back a fake "hair color" that's actually just more face.
+    if (skinHex && colorDistance(hex, skinHex) < 35) return null;
+    // Too close to the photo's own background means the "hair band" is
+    // actually just background showing around a short cut / hat / shaved
+    // head — see the khaki-background failure documented above.
+    var bg = sampleBackgroundRgb(full, w, h);
+    if (colorDistanceRgb(avg[0], avg[1], avg[2], bg.r, bg.g, bg.b) < 30) return null;
+    return hex;
+  }
+
   function showPhotoPreview(dataUrl, canvas) {
     currentPhotoDataUrl = dataUrl;
     photoPreview.src = dataUrl;
     photoPreview.style.display = "block";
     eyedropperHint.style.display = "block";
     btnAnalyze.style.display = "block";
-    localSkinToneHex = canvas ? extractSkinToneFromCanvas(canvas) : null;
+    localSkinToneHex = null;
+    localHairColorHex = null;
+    if (canvas) {
+      var ctx0 = canvas.getContext("2d");
+      var faceBox = findFaceBox(ctx0.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height);
+      if (faceBox) {
+        localSkinToneHex = extractSkinToneFromCanvas(canvas, faceBox);
+        localHairColorHex = extractHairColorFromCanvas(canvas, faceBox, localSkinToneHex);
+      }
+    }
+    var applied = [];
     if (localSkinToneHex) {
       // Applies immediately — free, no AI call needed for this part, and no
-      // extra button press. "Analyze & apply" is still there for hair
-      // style/color/build, which really do need the AI; skin tone doesn't.
+      // extra button press. "Analyze & apply" is still there for hairstyle
+      // and build, which really do need the AI; skin/hair color don't.
       currentSkinHex = localSkinToneHex;
       document.getElementById("col-skin").value = localSkinToneHex;
       rebuildTexture(currentGender);
-      setPhotoStatus("Skin tone auto-picked and applied. Click your skin above to fine-tune it if it's off.");
+      applied.push("skin tone");
+    }
+    if (localHairColorHex) {
+      currentHairHex = localHairColorHex;
+      document.getElementById("col-hair").value = localHairColorHex;
+      rebuildTexture(currentGender);
+      rebuildHairAccessory(currentGender);
+      applied.push("hair color");
+    }
+    if (applied.length) {
+      setPhotoStatus((applied.join(" and ") + " auto-picked and applied.").replace(/^./, function (c) { return c.toUpperCase(); }) + " Click above to fine-tune either if it's off.");
     } else {
-      setPhotoStatus("Couldn't find a clear face to auto-pick from — click your skin above to set it manually.");
+      setPhotoStatus("Couldn't find a clear face to auto-pick from — click your skin/hair above to set them manually.");
     }
   }
 
@@ -1497,10 +1905,11 @@
     // A real measurement from this exact photo's own pixels beats the AI's
     // text description of a color every time it's available — only fall
     // back to the AI's estimate when too little of the photo matched the
-    // skin classifier to trust (see extractSkinToneFromCanvas).
+    // skin classifier to trust (see extractSkinToneFromCanvas), and same
+    // for hair color (see extractHairColorFromCanvas).
     currentSkinHex = localSkinToneHex || result.skinToneHex || currentSkinHex;
     document.getElementById("col-skin").value = currentSkinHex || getSkinHex(currentGender);
-    currentHairHex = result.hairColorHex || currentHairHex;
+    currentHairHex = localHairColorHex || result.hairColorHex || currentHairHex;
     document.getElementById("col-hair").value = currentHairHex;
     currentHairStyle = result.hairStyle;
     document.getElementById("sel-hairstyle").value = currentHairStyle;
@@ -1535,8 +1944,23 @@
       btnAnalyze.disabled = false;
       if (!r.ok) { setPhotoStatus(r.body.error || "Analysis failed.", true); return; }
       applyPhotoResult(r.body);
-      var skinNote = localSkinToneHex ? "skin tone measured directly from your photo" : "skin tone estimated by AI (couldn't measure enough matching pixels)";
-      setPhotoStatus("Applied — hair style, hair color, and build updated to match; " + skinNote + ".");
+      // Three real outcomes here, not two — a previous version only ever
+      // said "measured directly" or "estimated by AI", silently assuming
+      // the AI always has a fallback value ready. When BOTH the local pixel
+      // measurement AND the AI's own estimate come back empty (r.body's
+      // hairColorHex/skinToneHex can genuinely be null — see serve.mjs's
+      // sanitizer), currentHairHex/currentSkinHex just keep whatever they
+      // already were (see applyPhotoResult) — nothing actually changes on
+      // the character, but the old message still claimed "estimated by
+      // AI" as if something had. That's a real bug, not a phrasing nitpick:
+      // it reads as "I updated it" while silently doing nothing.
+      var skinNote = localSkinToneHex ? "skin tone measured directly from your photo"
+        : r.body.skinToneHex ? "skin tone estimated by AI"
+        : "couldn't determine a skin tone — left unchanged, pick one manually above";
+      var hairNote = localHairColorHex ? "hair color measured directly from your photo"
+        : r.body.hairColorHex ? "hair color estimated by AI"
+        : "couldn't determine a hair color — left unchanged, pick one manually above";
+      setPhotoStatus("Applied — hairstyle and build updated to match; " + skinNote + "; " + hairNote + ".");
     }).catch(function (err) {
       btnAnalyze.disabled = false;
       setPhotoStatus("Request failed: " + err.message, true);
@@ -1652,6 +2076,115 @@
     autorotateBtn.textContent = "Auto-rotate: " + (autoRotate ? "on" : "off");
   });
 
+  // ---------- Angry reaction: steam-from-ears particle burst ----------
+  // No ear bone on this rig (checked the joint list) — approximate ear
+  // position measured directly off the actual head mesh instead of
+  // guessing: the widest X extent at ear height (eye-level Y band, near-zero
+  // Z so it's the SIDE of the head, not front or back) sits at |X|≈0.085m,
+  // right around the Head bone's own Y — used as the local ear anchor,
+  // parented onto the Head bone the same way hair is, so it moves correctly
+  // with the head at any height/pose.
+  var EAR_LOCAL_OFFSET = { x: 0.088, y: 0.0, z: 0.0 };
+
+  // Procedural soft-circle texture (canvas, same technique already used
+  // elsewhere in this app for the baked-texture recolor) — no external
+  // asset needed for a plain smoke-puff sprite.
+  var smokeTextureCache = null;
+  function getSmokeTexture() {
+    if (smokeTextureCache) return smokeTextureCache;
+    var size = 64;
+    var c = document.createElement("canvas");
+    c.width = c.height = size;
+    var ctx = c.getContext("2d");
+    var grad = ctx.createRadialGradient(size / 2, size / 2, 0, size / 2, size / 2, size / 2);
+    grad.addColorStop(0, "rgba(255,255,255,0.9)");
+    grad.addColorStop(0.5, "rgba(255,255,255,0.35)");
+    grad.addColorStop(1, "rgba(255,255,255,0)");
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, size, size);
+    smokeTextureCache = new THREE.CanvasTexture(c);
+    return smokeTextureCache;
+  }
+
+  var smokeParticles = []; // {sprite, velocity: Vector3, age, maxAge}
+  function spawnSmokeBurst(gender) {
+    var entry = cache[gender];
+    if (!entry || !entry.headBone) return;
+    var tex = getSmokeTexture();
+    [-1, 1].forEach(function (side) {
+      for (var i = 0; i < 10; i++) {
+        var mat = new THREE.SpriteMaterial({
+          map: tex, transparent: true, depthWrite: false,
+          color: 0xe8e8e8, opacity: 0
+        });
+        var sprite = new THREE.Sprite(mat);
+        var jitter = function (r) { return (Math.random() - 0.5) * r; };
+        sprite.position.set(
+          side * EAR_LOCAL_OFFSET.x + jitter(0.015),
+          EAR_LOCAL_OFFSET.y + jitter(0.015),
+          EAR_LOCAL_OFFSET.z + jitter(0.015)
+        );
+        var scale = 0.03 + Math.random() * 0.02;
+        sprite.scale.set(scale, scale, 1);
+        entry.headBone.add(sprite);
+        smokeParticles.push({
+          sprite: sprite,
+          velocity: new THREE.Vector3(side * (0.05 + Math.random() * 0.05), 0.12 + Math.random() * 0.08, jitter(0.06)),
+          age: -i * 0.03, // stagger spawn within the burst instead of one instant puff
+          maxAge: 0.9 + Math.random() * 0.4
+        });
+      }
+    });
+  }
+
+  function updateSmoke(delta) {
+    for (var i = smokeParticles.length - 1; i >= 0; i--) {
+      var p = smokeParticles[i];
+      p.age += delta;
+      if (p.age < 0) continue; // still waiting on its staggered start
+      if (p.age >= p.maxAge) {
+        if (p.sprite.parent) p.sprite.parent.remove(p.sprite);
+        p.sprite.material.dispose();
+        smokeParticles.splice(i, 1);
+        continue;
+      }
+      var t = p.age / p.maxAge;
+      p.sprite.position.addScaledVector(p.velocity, delta);
+      p.velocity.y += delta * 0.02; // slight upward drift accelerates, like rising steam
+      var s = p.sprite.scale.x * (1 + delta * 0.6); // grows as it dissipates
+      p.sprite.scale.set(s, s, 1);
+      p.sprite.material.opacity = (1 - t) * 0.8;
+    }
+  }
+
+  // Trigger: brow furrow + mouth + smoke, one-shot — plays in, holds, fades
+  // out, then leaves the face exactly where the weight sliders currently
+  // say it should be (applyAnger(amount=0) still runs applyBodyShape).
+  var angerAnim = null; // {start: performance.now()} while a reaction is playing; null when idle
+  var ANGER_IN_MS = 250, ANGER_HOLD_MS = 1300, ANGER_OUT_MS = 450;
+  function triggerAngryReaction() {
+    if (angerAnim) return; // already playing — ignore a re-click mid-reaction
+    angerAnim = { start: performance.now() };
+    spawnSmokeBurst(currentGender);
+  }
+  function updateAnger() {
+    if (!angerAnim) return;
+    var elapsed = performance.now() - angerAnim.start;
+    var amount;
+    if (elapsed < ANGER_IN_MS) {
+      amount = elapsed / ANGER_IN_MS;
+    } else if (elapsed < ANGER_IN_MS + ANGER_HOLD_MS) {
+      amount = 1;
+    } else if (elapsed < ANGER_IN_MS + ANGER_HOLD_MS + ANGER_OUT_MS) {
+      amount = 1 - (elapsed - ANGER_IN_MS - ANGER_HOLD_MS) / ANGER_OUT_MS;
+    } else {
+      amount = 0;
+      angerAnim = null;
+    }
+    applyAnger(currentGender, amount);
+  }
+  document.getElementById("btn-angry").addEventListener("click", triggerAngryReaction);
+
   // ---------- render loop ----------
   var clock = new THREE.Clock();
   function animate() {
@@ -1659,6 +2192,8 @@
     var delta = clock.getDelta();
     var entry = cache[currentGender];
     if (entry && entry.mixer) entry.mixer.update(delta);
+    updateAnger();
+    updateSmoke(delta);
     if (autoRotate && !dragging) {
       theta += 0.004;
       updateCamera();
