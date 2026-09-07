@@ -89,26 +89,31 @@ async function analyzePhoto(req, res) {
 
     const prompt = `Analyze this photo and create a detailed 3D avatar description. Focus on accurately capturing the person's appearance.
 
+CRITICAL: IGNORE BACKGROUND COLORS COMPLETELY. Only extract colors from the person's face and hair.
+
 TASK:
 1. Determine gender from facial features, build, and clothing context
-2. Extract the actual visible skin tone (not stereotypical - measure the real color in the photo)
-3. Extract the actual visible hair color (measure the real color, accounting for lighting)
+2. Extract the actual visible skin tone from FACE ONLY (ignore background, clothing, surroundings)
+3. Extract the actual visible hair color from SCALP/HAIR ONLY (ignore background, clothing, surroundings)
 4. Match hairstyle to the closest option available
 5. Estimate body build and facial structure
 
 GENDER: Choose "male" or "female" based on visible characteristics.
 
-SKIN TONE: Sample the skin color from the face (cheeks, forehead) and provide the average hex color. Account for:
-- Lighting conditions in the photo
-- Shadows vs. direct light areas
-- Use the actual skin visible, not what you assume their ethnicity might be
-- If lighting is very dim/bright, adjust mentally for normal lighting
+SKIN TONE: Sample ONLY from exposed face areas (cheeks, forehead, chin, nose). Provide the average hex color. Account for:
+- Focus exclusively on the person's facial skin, ignore all background colors
+- Lighting conditions in the photo (adjust for shadows on face)
+- Use the actual exposed skin visible, not what you assume their ethnicity might be
+- If lighting is very dim/bright, adjust mentally for neutral/normal lighting
+- IMPORTANT: If background is similar color to skin, ignore background entirely - sample from face only
 
-HAIR COLOR: Sample from the hair that's clearly visible (avoid shadows). Provide the actual hex color you see, accounting for:
-- Lighting (indoor vs outdoor affects perception)
+HAIR COLOR: Sample from hair on the SCALP ONLY (top of head, crown, visible hair). Provide the actual hex color. Account for:
+- Focus exclusively on hair strands, ignore background and surrounding colors
+- Lighting (indoor vs outdoor affects perception - adjust for this)
 - Natural vs dyed appearance
-- Highlights and lowlights - use the dominant color
+- Highlights and lowlights - use the dominant hair color
 - Grey/white hair: use greyish or silver tones (#808080 range for grey, #f0f0f0 for white)
+- IMPORTANT: Do NOT sample from background colors that might resemble hair
 
 HAIRSTYLE: Pick the closest match from these options:
 ${HAIR_STYLE_DESCRIPTIONS}
@@ -118,17 +123,18 @@ BODY & FACE WEIGHT: most photos through this feature are a tight face/webcam sel
 - bodyWeight: 0.75=slim/athletic, 1.0=average, 1.4=heavier build. If shoulders/chest/neck ARE visible, judge directly from them. If the photo is cropped tight to just the face, a fuller face/neck (faceWeight above 1.1) usually goes with a heavier overall build and a narrow face (faceWeight below 0.9) with a slimmer one — use that correlation rather than falling back to 1.0 by default, but don't force bodyWeight and faceWeight to always move in lockstep either if the visible evidence disagrees.
 
 EDGE CASES:
-- If face is partially obscured, estimate from visible features
-- If wearing hat/hair covered, still pick the closest hairstyle based on hair visible
+- If face is partially obscured, estimate from visible features only
+- If wearing hat/hair covered, still pick the closest hairstyle based on visible hair
 - If no hair visible, use "default"
 - If person is bald/shaved head (no mohawk strip), use "default"
+- If background matches skin/hair color, ONLY use the person's actual body colors, not background
 
 Respond with ONLY valid JSON, no markdown, no explanation. Fill "observations" FIRST, in plain text, describing exactly what you actually see (hair length/texture/color, skin tone, build, any obscuring factors like hats or shadows) before committing to the structured fields below — ground every field that follows in what you just wrote, don't guess independently of it:
 {
   "observations": "one or two plain-text sentences describing the real visible hair, skin, and build details this photo shows",
   "genderGuess": "male" or "female",
-  "skinToneHex": "#rrggbb (actual color from face in photo)",
-  "hairColorHex": "#rrggbb (actual color from hair in photo)",
+  "skinToneHex": "#rrggbb (actual color from person's face only, not background)",
+  "hairColorHex": "#rrggbb (actual color from person's hair/scalp only, not background)",
   "hairStyle": "default, casual, casual2, adventurer, beach, suit, king, punk, or dreads",
   "bodyWeight": 0.75 to 1.4,
   "faceWeight": 0.8 to 1.3
