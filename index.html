@@ -243,6 +243,13 @@
       <option value="tpose">T-pose (static)</option>
       <option value="idle" selected>Idle</option>
       <option value="dance1">Dance 1</option>
+      <option value="walk">Walk</option>
+      <option value="wave">Wave</option>
+      <option value="hiphop">Hip Hop</option>
+      <option value="twerk">Twerk</option>
+      <option value="celebrate">Celebrating</option>
+      <option value="clapping">Clapping</option>
+      <option value="laughing">Laughing</option>
     </select>
   </div>
 
@@ -695,7 +702,14 @@
   // a pose system from scratch.
   var ANIMATION_CLIPS = {
     idle: "models/anim/idle.glb",
-    dance1: "models/anim/dance1.glb"
+    dance1: "models/anim/dance1.glb",
+    walk: "models/anim/rpm-walk.glb",
+    wave: "models/anim/rpm-wave.glb",
+    hiphop: "models/anim/rpm-hiphop.glb",
+    twerk: "models/anim/rpm-twerk.glb",
+    celebrate: "models/anim/rpm-celebrate.glb",
+    clapping: "models/anim/rpm-clapping.glb",
+    laughing: "models/anim/rpm-laughing.glb"
   };
   var animationClipCache = {}; // name -> THREE.AnimationClip (shared across genders, same skeleton)
   var animLoader = new THREE.GLTFLoader();
