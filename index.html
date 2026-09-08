@@ -85,6 +85,13 @@
     cursor: pointer;
     padding: 0;
   }
+  /* Clicking a swatch applied its color but never showed WHICH one was
+     picked — the row gave no feedback at all, unlike the gender toggle's
+     own .active state. A ring around the current selection closes that
+     gap the same way. */
+  .swatches button.active {
+    box-shadow: 0 0 0 2px #14161b, 0 0 0 4px #6a9bff;
+  }
   .row select {
     width: 140px;
     background: #1d2029;
@@ -182,13 +189,66 @@
     pointer-events: none;
   }
   #loading.hidden { display: none; }
+
+  /* ---------- mobile: collapsible bottom-drawer panel ---------- */
+  /* Desktop layout above is untouched outside this query — this only
+     changes anything at/under the breakpoint. Reported directly: on a
+     phone, the always-open top-left panel (240px wide, ~15 rows of
+     controls) either overflowed the screen or covered most of the
+     character. Below the breakpoint, the panel becomes a closed-by-default
+     bottom sheet — character fully visible on load, panel slides up on tap
+     instead of always taking up screen space. */
+  #panel-toggle {
+    display: none;
+    position: fixed;
+    right: 16px; bottom: 16px;
+    z-index: 20;
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(24, 26, 32, 0.92);
+    color: #fff;
+    font-size: 22px;
+    line-height: 1;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    box-shadow: 0 8px 24px rgba(0,0,0,0.35);
+  }
+  #panel-drag-handle {
+    display: none;
+    width: 36px; height: 4px;
+    border-radius: 2px;
+    background: rgba(255,255,255,0.25);
+    margin: 0 auto 12px;
+  }
+  @media (max-width: 700px) {
+    #panel-toggle { display: flex; }
+    #panel {
+      left: 0; right: 0; top: auto; bottom: 0;
+      width: auto;
+      max-height: 72vh;
+      border-radius: 16px 16px 0 0;
+      /* translateY, not display:none — an animated slide reads as "this
+         opens/closes", not "this piece of UI just vanished/appeared". */
+      transform: translateY(100%);
+      transition: transform 0.25s ease;
+      overflow-y: auto;
+      -webkit-overflow-scrolling: touch;
+      padding-bottom: max(16px, env(safe-area-inset-bottom));
+    }
+    #panel.open { transform: translateY(0); }
+    #panel-drag-handle { display: block; }
+  }
 </style>
 </head>
 <body>
 <div id="viewport"></div>
 <div id="loading">Loading character…</div>
+<button id="panel-toggle" aria-label="Toggle character settings">☰</button>
 
 <div id="panel">
+  <div id="panel-drag-handle"></div>
   <h1>Character</h1>
   <div class="gender-toggle">
     <button id="btn-male" class="active">Male</button>
@@ -252,6 +312,8 @@
   <div class="row"><span>Reactions</span></div>
   <div class="photo-row">
     <button class="photo-btn" id="btn-angry">😠 Angry</button>
+    <button class="photo-btn" id="btn-laughing">😂 Laughing</button>
+    <button class="photo-btn" id="btn-middle-finger">🖕 Flip off</button>
   </div>
 
   <div class="divider"></div>
@@ -284,15 +346,30 @@
     female: "models/feminine_skin_mask.png"
   };
   var HAIR_PRESETS = ["#0b0b0b", "#3b2a1e", "#6b4226", "#a85c2c", "#c99a4b", "#8a8a8a", "#e6e6e6", "#c0392b"];
-  // Old palette (#ffe0bd/#f1c27d/#c68642/#8d5524/...) was a generic
-  // web-emoji-style skin-tone ramp — a couple of its steps (especially
-  // #f1c27d and #8d5524) lean noticeably more orange/yellow-saturated than
-  // real skin reflectance, closer to a "spray tan" swatch than a photo of
-  // an actual person. Replaced with 8 evenly-spaced points from the Monk
-  // Skin Tone Scale (research-grounded skin-tone reference built from real
-  // photographed skin, not picked by eye) instead of inventing another set
-  // of hex guesses.
-  var SKIN_PRESETS = ["#f6ede4", "#f7ead0", "#eadaba", "#d7bd96", "#a07e56", "#825c43", "#604134", "#292420"];
+  // Went through two palettes before this one, each wrong in a different
+  // way — worth keeping the history so a third rewrite doesn't repeat
+  // either mistake:
+  // 1. Original web-emoji-style ramp (#ffe0bd/#f1c27d/#c68642/#8d5524/...):
+  //    a couple of steps (especially #f1c27d, #8d5524) leaned noticeably
+  //    more orange/yellow-saturated than real skin reflectance — closer to
+  //    a "spray tan" swatch than a photo of an actual person.
+  // 2. Monk Skin Tone Scale values (#f6ede4.../#292420): photographically
+  //    real, but as a flat 22px CSS swatch DOT (not applied to the shaded,
+  //    lit 3D face) the lightest and darkest steps read as plain
+  //    white/plain black — real per-pixel reported this looked "weird",
+  //    and checking the actual numbers confirms why: their saturation is
+  //    genuinely very low (HSL saturation mathematically drops toward 0 at
+  //    either lightness extreme, for any hue — see the same issue already
+  //    fixed for the 3D render itself, blendMaskedRegion's `ratioSat`).
+  // This palette fixes that directly instead of picking single hex values
+  // by eye a third time: one fixed hue (28°, the same real-skin hue family
+  // already measured elsewhere in this app — see isSkinPixel's 4-46° band)
+  // and one fixed, moderate saturation (0.35 — richer than raw Monk Scale,
+  // nowhere near the old palette's oversaturated steps) held constant
+  // across 8 evenly-stepped lightness values. Every step keeps the same
+  // visible "warmth" a real swatch dot needs, light through dark, instead
+  // of collapsing toward grey at either end.
+  var SKIN_PRESETS = ["#f2eae3", "#decbba", "#caab91", "#b68c68", "#976e49", "#6e5035", "#4c3724", "#302317"];
 
   // ---------- hairstyle geometry: real assets ----------
   // Real hair meshes extracted from Quaternius's "Ultimate Modular
@@ -530,11 +607,44 @@
   }
   updateCamera();
 
+  // Touch pinch-to-zoom, alongside the existing mouse-drag orbit and wheel
+  // zoom — pointer events already unify mouse/touch for the single-finger
+  // drag above, but a second simultaneous touch (pinch) needs its own
+  // tracking; nothing here changes mouse behavior, a mouse never sends a
+  // second pointerId.
+  var activePointers = {}; // pointerId -> {x, y}
+  var pinchStartDist = null, pinchStartRadius = null;
+  function pointerDistance() {
+    var ids = Object.keys(activePointers);
+    if (ids.length < 2) return null;
+    var a = activePointers[ids[0]], b = activePointers[ids[1]];
+    return Math.hypot(a.x - b.x, a.y - b.y);
+  }
   renderer.domElement.addEventListener("pointerdown", function (e) {
-    dragging = true; lastX = e.clientX; lastY = e.clientY;
+    activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    if (Object.keys(activePointers).length === 2) {
+      pinchStartDist = pointerDistance();
+      pinchStartRadius = radius;
+      dragging = false; // a second finger landing mid-drag means "pinch now", not "keep rotating"
+    } else {
+      dragging = true; lastX = e.clientX; lastY = e.clientY;
+    }
   });
-  window.addEventListener("pointerup", function () { dragging = false; });
+  function releasePointer(e) {
+    delete activePointers[e.pointerId];
+    pinchStartDist = null;
+    dragging = Object.keys(activePointers).length === 1;
+  }
+  window.addEventListener("pointerup", releasePointer);
+  window.addEventListener("pointercancel", releasePointer);
   window.addEventListener("pointermove", function (e) {
+    if (activePointers[e.pointerId]) activePointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    if (Object.keys(activePointers).length === 2 && pinchStartDist) {
+      var dist = pointerDistance();
+      radius = Math.min(Math.max(pinchStartRadius * (pinchStartDist / dist), 1.6), 8);
+      updateCamera();
+      return;
+    }
     if (!dragging) return;
     var dx = e.clientX - lastX, dy = e.clientY - lastY;
     lastX = e.clientX; lastY = e.clientY;
@@ -1072,6 +1182,15 @@
   var ANGER_CHIN_Z_MIN = 0.06;
   var ANGER_CHIN_X_MAX = 0.045;
 
+  // Eyelid band for the Laughing reaction's squint, added in the same pass
+  // as the anger regions below (one scan over all vertices, not two) — the
+  // eyeBALL itself is separate geometry on its own LeftEye/RightEye bones
+  // (confirmed earlier, for the face-weight eye-protection code above), so
+  // filtering to Head-bone-dominant vertices here already excludes it; this
+  // band is real eyelid/socket skin, safe to move without touching the eye.
+  var EYELID_Y_HALF = 0.02;
+  var EYELID_X_MAX = 0.065;
+
   function computeAngerRegions(gender) {
     var entry = cache[gender];
     var geo = entry.geometry, skeleton = entry.skeleton;
@@ -1080,10 +1199,16 @@
     var skinWt = geo.attributes.skinWeight;
     var boneNameList = skeleton.bones.map(function (b) { return b.name; });
     var headBoneIdx = boneNameList.indexOf("Head");
+    var leftEyeIdx = boneNameList.indexOf("LeftEye");
+    var rightEyeIdx = boneNameList.indexOf("RightEye");
+    var eyeCenters = [leftEyeIdx, rightEyeIdx].filter(function (i) { return i >= 0; })
+      .map(function (i) { return boneWeightedCentroid(pos, skinIdx, skinWt, i); }).filter(Boolean);
+    var eyeY = eyeCenters.length ? eyeCenters.reduce(function (s, c) { return s + c[1]; }, 0) / eyeCenters.length : 1.72;
 
     var browIdx = [], browWeight = [];
     var lipIdx = [], lipYs = [];
     var chinCandidates = []; // {i, x, y, z} — resolved into indices/weights once lipMidY is known
+    var eyelidIdx = [], eyelidYs = [];
     var yMid = (ANGER_BROW_Y.lo + ANGER_BROW_Y.hi) / 2;
     var yHalf = (ANGER_BROW_Y.hi - ANGER_BROW_Y.lo) / 2;
     for (var i = 0; i < pos.count; i++) {
@@ -1111,6 +1236,10 @@
       if (z >= ANGER_CHIN_Z_MIN && y >= FACE_Y.chin && y <= ANGER_MOUTH_Y.hi && Math.abs(x) <= ANGER_CHIN_X_MAX) {
         chinCandidates.push({ i: i, y: y });
       }
+      if (z > 0.06 && Math.abs(y - eyeY) < EYELID_Y_HALF && Math.abs(x) < EYELID_X_MAX) {
+        eyelidIdx.push(i);
+        eyelidYs.push(y);
+      }
     }
     var lipMidY = lipYs.length ? (Math.min.apply(null, lipYs) + Math.max.apply(null, lipYs)) / 2 : 0;
 
@@ -1128,6 +1257,8 @@
     entry.angerLipIsUpper = lipYs.map(function (y) { return y > lipMidY; });
     entry.angerChinIndices = chinIdx;
     entry.angerChinWeight = chinWeight;
+    entry.eyelidIndices = eyelidIdx;
+    entry.eyelidIsUpper = eyelidYs.map(function (y) { return y > eyeY; });
   }
 
   // amount: 0 = neutral, 1 = fully angry. Always re-derives from the current
@@ -1150,32 +1281,75 @@
       var w = entry.angerBrowWeight[k] * amount;
       if (w <= 0) continue;
       var ox = pos.getX(idx), oy = pos.getY(idx), oz = pos.getZ(idx);
-      pos.setXYZ(idx, ox, oy - 0.045 * w, oz + 0.012 * w);
+      // Deepened from the original -0.045/+0.012 — real feedback was that
+      // brow furrow alone read as too subtle to clearly say "angry" at a
+      // glance. Paired with the eyelid narrowing below (reusing the same
+      // eyelid regions the Laughing reaction already uses, just squeezed a
+      // lot less far and in a glare-appropriate ratio — mostly upper lid
+      // down, not much lower lid up, the opposite emphasis from a laugh's
+      // symmetric squeeze-shut) instead of pushing the brow furrow so far
+      // it risks looking wrong on its own.
+      pos.setXYZ(idx, ox, oy - 0.07 * w, oz + 0.02 * w);
     }
-    // This rig has no interior mouth geometry (checked — single mesh,
-    // single material), so there's a hard ceiling on how far "open" can go
-    // before it needs topology that doesn't exist. First fix for the lip
-    // cluster alone still read as a protruding tongue (screenshot evidence)
-    // — a real jaw opens by the whole chin dropping WITH the lower lip, not
-    // the lip stretching alone, so the broader chin region below (computed
-    // in computeAngerRegions, smoothstepped to zero at FACE_Y.chin) drops
-    // together with it here.
-    for (var m = 0; m < entry.angerLipIndices.length; m++) {
-      var idx2 = entry.angerLipIndices[m];
-      var ox2 = pos.getX(idx2), oy2 = pos.getY(idx2), oz2 = pos.getZ(idx2);
-      if (entry.angerLipIsUpper[m]) {
-        pos.setXYZ(idx2, ox2, oy2 + 0.004 * amount, oz2);
+    for (var e = 0; e < entry.eyelidIndices.length; e++) {
+      var idx4 = entry.eyelidIndices[e];
+      var ox4 = pos.getX(idx4), oy4 = pos.getY(idx4), oz4 = pos.getZ(idx4);
+      if (entry.eyelidIsUpper[e]) {
+        pos.setXYZ(idx4, ox4, oy4 - 0.006 * amount, oz4);
       } else {
-        pos.setXYZ(idx2, ox2, oy2 - 0.016 * amount, oz2 - 0.002 * amount);
+        pos.setXYZ(idx4, ox4, oy4 + 0.002 * amount, oz4);
       }
     }
-    for (var c = 0; c < entry.angerChinIndices.length; c++) {
-      var idx3 = entry.angerChinIndices[c];
-      var cw = entry.angerChinWeight[c] * amount;
-      if (cw <= 0) continue;
-      var ox3 = pos.getX(idx3), oy3 = pos.getY(idx3), oz3 = pos.getZ(idx3);
-      pos.setXYZ(idx3, ox3, oy3 - 0.016 * cw, oz3 - 0.002 * cw);
+    // Mouth-open (lip + chin drop) removed after real feedback on the
+    // rendered result, not just left as a known cosmetic quirk: no matter
+    // how the geometry was reshaped, this rig has no interior mouth texture
+    // (single mesh, single material) for the opening to reveal, so ANY
+    // amount of "open" reads as a stray flesh-colored flap, not a mouth —
+    // confirmed broken-looking on screen, not just theoretically imperfect.
+    // Brow furrow + eye narrowing carry the expression without it.
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+  }
+
+  // amount: 0 = neutral, 1 = full laugh. Same regions computeAngerRegions
+  // already found (brow/lip/chin), plus the eyelid band, reused with
+  // different direction/magnitude for a laugh instead of anger — brows
+  // raise (not furrow), eyes squint shut, mouth opens bigger than anger's
+  // (a big laugh's mouth is the most open expression this face makes).
+  // Same rebuild-from-baseline rule as applyAnger, same reason: laugh and
+  // anger touch the same overlapping vertices, so whichever ran last must
+  // never build on the other's leftover result.
+  function applyLaughFace(gender, amount) {
+    var entry = cache[gender];
+    if (!entry || !entry.angerBrowIndices) return;
+    applyBodyShape(gender, currentBodyWeight, currentFaceWeight);
+    if (amount <= 0) return;
+    var geo = entry.geometry;
+    var pos = geo.attributes.position;
+
+    for (var k = 0; k < entry.angerBrowIndices.length; k++) {
+      var idx = entry.angerBrowIndices[k];
+      var w = entry.angerBrowWeight[k] * amount;
+      if (w <= 0) continue;
+      var ox = pos.getX(idx), oy = pos.getY(idx), oz = pos.getZ(idx);
+      pos.setXYZ(idx, ox, oy + 0.012 * w, oz + 0.004 * w);
     }
+    for (var e = 0; e < entry.eyelidIndices.length; e++) {
+      var idx4 = entry.eyelidIndices[e];
+      var ox4 = pos.getX(idx4), oy4 = pos.getY(idx4), oz4 = pos.getZ(idx4);
+      // Upper lid down, lower lid up — closing toward the eye's own center,
+      // same "squeeze shut" shape a real laugh-squint makes.
+      if (entry.eyelidIsUpper[e]) {
+        pos.setXYZ(idx4, ox4, oy4 - 0.01 * amount, oz4);
+      } else {
+        pos.setXYZ(idx4, ox4, oy4 + 0.008 * amount, oz4);
+      }
+    }
+    // Mouth-open (lip + chin drop) removed after real feedback on the
+    // rendered result — same reason as applyAnger above: no interior mouth
+    // texture on this rig, so any opening reads as a stray flesh flap, not
+    // a laughing mouth. Raised brow + squinted eyes carry the expression
+    // without it.
     pos.needsUpdate = true;
     geo.computeVertexNormals();
   }
@@ -1332,10 +1506,23 @@
         });
         cache[gender] = { root: root, material: material, originalMap: material.map, headBone: headBone, hipsBone: hipsBone, geometry: meshObj.geometry, skeleton: meshObj.skeleton, bindMatrix: meshObj.bindMatrix };
         cache[gender].mixer = new THREE.AnimationMixer(root);
+        // Rest-pose quaternion per bone, captured right now before any
+        // animation/mixer update has ever touched this skeleton — the
+        // middle-finger reaction (see below) rotates specific bones
+        // relative to THEIR OWN rest orientation, not an absolute guess,
+        // since this rig's bones don't share one common local-axis
+        // convention (shoulder joints in particular have large, unusual
+        // rest rotations — checked directly, not assumed).
+        cache[gender].restQuaternions = {};
+        cache[gender].skeleton.bones.forEach(function (b) {
+          cache[gender].restQuaternions[b.name] = b.quaternion.clone();
+        });
+        root.updateMatrixWorld(true); // world positions below need real matrices, not scene-graph defaults
         computeHairBump(gender);
         computeBodyShapeGroups(gender);
         computeFaceWeightGroup(gender);
         computeAngerRegions(gender);
+        computeMiddleFingerTargets(gender);
         applyBodyShape(gender, currentBodyWeight, currentFaceWeight);
         placeModel(root);
         resetHairFitDeltas();
@@ -1794,6 +1981,7 @@
       currentSkinHex = localSkinToneHex;
       document.getElementById("col-skin").value = localSkinToneHex;
       rebuildTexture(currentGender);
+      setActiveSwatch(skinSwatchWrap, localSkinToneHex);
       applied.push("skin tone");
     }
     if (localHairColorHex) {
@@ -1801,6 +1989,7 @@
       document.getElementById("col-hair").value = localHairColorHex;
       rebuildTexture(currentGender);
       rebuildHairAccessory(currentGender);
+      setActiveSwatch(swatchWrap, localHairColorHex);
       applied.push("hair color");
     }
     if (applied.length) {
@@ -1869,6 +2058,7 @@
       currentSkinHex = hex;
       document.getElementById("col-skin").value = hex;
       rebuildTexture(currentGender);
+      setActiveSwatch(skinSwatchWrap, hex);
       setPhotoStatus("Picked " + hex + " from where you clicked — applied to the character.");
     };
   }
@@ -1909,8 +2099,10 @@
     // for hair color (see extractHairColorFromCanvas).
     currentSkinHex = localSkinToneHex || result.skinToneHex || currentSkinHex;
     document.getElementById("col-skin").value = currentSkinHex || getSkinHex(currentGender);
+    setActiveSwatch(skinSwatchWrap, currentSkinHex);
     currentHairHex = localHairColorHex || result.hairColorHex || currentHairHex;
     document.getElementById("col-hair").value = currentHairHex;
+    setActiveSwatch(swatchWrap, currentHairHex);
     currentHairStyle = result.hairStyle;
     document.getElementById("sel-hairstyle").value = currentHairStyle;
     currentBodyWeight = result.bodyWeight;
@@ -1985,10 +2177,25 @@
     setHairBumpHidden(gender, currentHairStyle !== "default");
   }
 
+  // A swatch click applied its color but never showed WHICH swatch was
+  // picked — no feedback at all, unlike the gender toggle's own .active
+  // state. Also called after every OTHER way a color can change (manual
+  // hex entry, eyedropper, photo auto-measurement, AI result) so the row
+  // stays honest: a custom value that doesn't exactly match any preset
+  // correctly clears the ring rather than leaving a stale swatch looking
+  // selected.
+  function setActiveSwatch(wrap, hex) {
+    var target = (hex || "").toLowerCase();
+    wrap.querySelectorAll("button").forEach(function (b) {
+      b.classList.toggle("active", b.title.toLowerCase() === target);
+    });
+  }
+
   var skinInput = document.getElementById("col-skin");
   skinInput.addEventListener("input", function (e) {
     currentSkinHex = e.target.value;
     rebuildTexture(currentGender);
+    setActiveSwatch(skinSwatchWrap, currentSkinHex);
   });
 
   var skinSwatchWrap = document.getElementById("skin-swatches");
@@ -2000,6 +2207,7 @@
       currentSkinHex = hex;
       skinInput.value = hex;
       rebuildTexture(currentGender);
+      setActiveSwatch(skinSwatchWrap, hex);
     });
     skinSwatchWrap.appendChild(b);
   });
@@ -2009,6 +2217,7 @@
     currentHairHex = e.target.value;
     refreshBakedHair(currentGender);
     rebuildHairAccessory(currentGender);
+    setActiveSwatch(swatchWrap, currentHairHex);
   });
 
   var swatchWrap = document.getElementById("hair-swatches");
@@ -2021,6 +2230,7 @@
       hairInput.value = hex;
       refreshBakedHair(currentGender);
       rebuildHairAccessory(currentGender);
+      setActiveSwatch(swatchWrap, hex);
     });
     swatchWrap.appendChild(b);
   });
@@ -2076,15 +2286,33 @@
     autorotateBtn.textContent = "Auto-rotate: " + (autoRotate ? "on" : "off");
   });
 
+  // Mobile-only bottom-sheet toggle (button itself is display:none above the
+  // breakpoint, see CSS — this listener existing unused on desktop is
+  // harmless, a hidden button can't be clicked).
+  var panelToggleBtn = document.getElementById("panel-toggle");
+  var panelEl = document.getElementById("panel");
+  panelToggleBtn.addEventListener("click", function () {
+    var open = panelEl.classList.toggle("open");
+    panelToggleBtn.textContent = open ? "✕" : "☰";
+  });
+
   // ---------- Angry reaction: steam-from-ears particle burst ----------
-  // No ear bone on this rig (checked the joint list) — approximate ear
-  // position measured directly off the actual head mesh instead of
-  // guessing: the widest X extent at ear height (eye-level Y band, near-zero
-  // Z so it's the SIDE of the head, not front or back) sits at |X|≈0.085m,
-  // right around the Head bone's own Y — used as the local ear anchor,
-  // parented onto the Head bone the same way hair is, so it moves correctly
-  // with the head at any height/pose.
-  var EAR_LOCAL_OFFSET = { x: 0.088, y: 0.0, z: 0.0 };
+  // No ear bone on this rig (checked the joint list). The previous
+  // { x: 0.088, y: 0, z: 0 } offset was wrong, not a rendering issue —
+  // confirmed by parenting a big, unmissable debug marker sphere onto
+  // headBone at exactly that offset and screenshotting from the front: it
+  // sat down near the JAW/NECK, nowhere close to the ears. Root cause,
+  // found by actually converting a real ear vertex's position into
+  // Head-bone-LOCAL space (not just eyeballing world coordinates, which is
+  // what the old comment's "measured directly" apparently did): the Head
+  // bone's local axes are ROTATED relative to world space — a real
+  // ear-height, side-of-head vertex's LOCAL z comes out around -0.07, not
+  // ~0, and local x/y aren't a simple copy of world x/y either. A
+  // world-aligned guess for a LOCAL offset was never going to land in the
+  // right place regardless of how good the world-space measurement was.
+  // These values are the actual measured local-space position of a real
+  // ear-region vertex (averaged across a few candidates on each side).
+  var EAR_LOCAL_OFFSET = { x: 0.088, y: 0.058, z: -0.07 };
 
   // Procedural soft-circle texture (canvas, same technique already used
   // elsewhere in this app for the baked-texture recolor) — no external
@@ -2111,6 +2339,20 @@
     var entry = cache[gender];
     if (!entry || !entry.headBone) return;
     var tex = getSmokeTexture();
+    // Particles are children of headBone (so they track head position),
+    // but their own velocity gets applied as a LOCAL-space offset each
+    // frame (see updateSmoke) — and the Head bone's local axes are rotated
+    // relative to world space (see EAR_LOCAL_OFFSET above). A velocity
+    // written as if local Y were "up" and local X were "sideways" would
+    // drift in whatever odd direction those rotated axes actually point in
+    // world space, not visibly rise like real steam. Converting the
+    // intended WORLD-space direction into the bone's current local space
+    // once here (its rotation barely changes over one ~1s particle life)
+    // fixes that regardless of how the bone's axes happen to be oriented.
+    var headQuat = new THREE.Quaternion();
+    entry.headBone.getWorldQuaternion(headQuat);
+    var invHeadQuat = headQuat.clone().invert();
+    var localUp = new THREE.Vector3(0, 1, 0).applyQuaternion(invHeadQuat); // see updateSmoke's acceleration line
     [-1, 1].forEach(function (side) {
       for (var i = 0; i < 10; i++) {
         var mat = new THREE.SpriteMaterial({
@@ -2127,9 +2369,11 @@
         var scale = 0.03 + Math.random() * 0.02;
         sprite.scale.set(scale, scale, 1);
         entry.headBone.add(sprite);
+        var worldVelocity = new THREE.Vector3(side * (0.05 + Math.random() * 0.05), 0.12 + Math.random() * 0.08, jitter(0.06));
         smokeParticles.push({
           sprite: sprite,
-          velocity: new THREE.Vector3(side * (0.05 + Math.random() * 0.05), 0.12 + Math.random() * 0.08, jitter(0.06)),
+          velocity: worldVelocity.applyQuaternion(invHeadQuat),
+          localUp: localUp, // shared per burst — same reasoning as the velocity conversion above
           age: -i * 0.03, // stagger spawn within the burst instead of one instant puff
           maxAge: 0.9 + Math.random() * 0.4
         });
@@ -2150,22 +2394,36 @@
       }
       var t = p.age / p.maxAge;
       p.sprite.position.addScaledVector(p.velocity, delta);
-      p.velocity.y += delta * 0.02; // slight upward drift accelerates, like rising steam
+      // Accelerate along the bone-local direction that actually corresponds
+      // to world-up (see spawnSmokeBurst's localUp) — plain `velocity.y +=`
+      // would accelerate along the Head bone's own local Y axis instead,
+      // which isn't world-up (that axis is rotated relative to world space,
+      // same issue as EAR_LOCAL_OFFSET above).
+      p.velocity.addScaledVector(p.localUp, delta * 0.02); // slight upward drift accelerates, like rising steam
       var s = p.sprite.scale.x * (1 + delta * 0.6); // grows as it dissipates
       p.sprite.scale.set(s, s, 1);
       p.sprite.material.opacity = (1 - t) * 0.8;
     }
   }
 
-  // Trigger: brow furrow + mouth + smoke, one-shot — plays in, holds, fades
-  // out, then leaves the face exactly where the weight sliders currently
-  // say it should be (applyAnger(amount=0) still runs applyBodyShape).
-  var angerAnim = null; // {start: performance.now()} while a reaction is playing; null when idle
-  var ANGER_IN_MS = 250, ANGER_HOLD_MS = 1300, ANGER_OUT_MS = 450;
+  // Trigger: brow furrow + mouth + smoke — plays in, holds, fades out, then
+  // leaves the face exactly where the weight sliders currently say it
+  // should be (applyAnger(amount=0) still runs applyBodyShape). Hold
+  // stretched from 1300ms to 3000ms (the whole reaction was reading as too
+  // quick to really register); smoke was a single one-shot burst whose
+  // particles (each ~0.9-1.3s) fully finished well before even the OLD,
+  // shorter hold ended, let alone this longer one — leaving the face angry
+  // with no smoke for most of the hold. Re-spawns a fresh burst
+  // periodically through the whole hold instead (see SMOKE_REPEAT_MS
+  // below) so it keeps puffing the entire time, not just at the start.
+  var angerAnim = null; // {start: performance.now(), lastSmoke: number} while playing; null when idle
+  var ANGER_IN_MS = 300, ANGER_HOLD_MS = 3000, ANGER_OUT_MS = 500;
+  var SMOKE_REPEAT_MS = 550;
   function triggerAngryReaction() {
     if (angerAnim) return; // already playing — ignore a re-click mid-reaction
-    angerAnim = { start: performance.now() };
+    angerAnim = { start: performance.now(), lastSmoke: -Infinity };
     spawnSmokeBurst(currentGender);
+    angerAnim.lastSmoke = 0;
   }
   function updateAnger() {
     if (!angerAnim) return;
@@ -2175,6 +2433,11 @@
       amount = elapsed / ANGER_IN_MS;
     } else if (elapsed < ANGER_IN_MS + ANGER_HOLD_MS) {
       amount = 1;
+      // Keep puffing throughout the hold, not just once at trigger time.
+      if (elapsed - angerAnim.lastSmoke >= SMOKE_REPEAT_MS) {
+        spawnSmokeBurst(currentGender);
+        angerAnim.lastSmoke = elapsed;
+      }
     } else if (elapsed < ANGER_IN_MS + ANGER_HOLD_MS + ANGER_OUT_MS) {
       amount = 1 - (elapsed - ANGER_IN_MS - ANGER_HOLD_MS) / ANGER_OUT_MS;
     } else {
@@ -2185,6 +2448,151 @@
   }
   document.getElementById("btn-angry").addEventListener("click", triggerAngryReaction);
 
+  // Trigger: reuses the real "laughing" mocap clip (already sitting in
+  // ANIMATION_CLIPS, same reuse-over-rebuild rule as everything else in this
+  // app) as the BODY pose for the duration of the reaction, temporarily
+  // switching `currentAnimation` to it and back — not just calling
+  // applyAnimation directly, because its own async clip-load guards on
+  // `currentAnimation === requestedAnim`; without also setting the global,
+  // that guard would silently reject this trigger's own load. Restores
+  // whatever the Animation dropdown actually had selected once the reaction
+  // ends, so the dropdown's own state and the live pose end up back in sync.
+  var laughAnim = null; // {start, gender, previousAnimation} while playing; null when idle
+  var LAUGH_IN_MS = 250, LAUGH_HOLD_MS = 1800, LAUGH_OUT_MS = 450;
+  function triggerLaughingReaction() {
+    if (laughAnim) return; // already playing — ignore a re-click mid-reaction
+    var gender = currentGender;
+    var previousAnimation = currentAnimation;
+    currentAnimation = "laughing";
+    applyAnimation(gender, "laughing");
+    laughAnim = { start: performance.now(), gender: gender, previousAnimation: previousAnimation };
+  }
+  function updateLaugh() {
+    if (!laughAnim) return;
+    var elapsed = performance.now() - laughAnim.start;
+    var gender = laughAnim.gender;
+    var amount;
+    if (elapsed < LAUGH_IN_MS) {
+      amount = elapsed / LAUGH_IN_MS;
+    } else if (elapsed < LAUGH_IN_MS + LAUGH_HOLD_MS) {
+      amount = 1;
+    } else if (elapsed < LAUGH_IN_MS + LAUGH_HOLD_MS + LAUGH_OUT_MS) {
+      amount = 1 - (elapsed - LAUGH_IN_MS - LAUGH_HOLD_MS) / LAUGH_OUT_MS;
+    } else {
+      amount = 0;
+      var previousAnimation = laughAnim.previousAnimation;
+      laughAnim = null;
+      currentAnimation = previousAnimation;
+      applyAnimation(gender, previousAnimation);
+    }
+    applyLaughFace(gender, amount);
+  }
+  document.getElementById("btn-laughing").addEventListener("click", triggerLaughingReaction);
+
+  // ---------- Middle-finger reaction ----------
+  // First version hand-posed the whole arm via bone rotation (no existing
+  // asset for this gesture specifically) — world-space aim math got the
+  // shoulder/elbow angle technically right (verified: both arms genuinely
+  // symmetric from a top-down check), but hand-crafting an arm pose from
+  // scratch fought the same "which angle actually looks natural" problem
+  // every step of the way, and even once correct, it only looked right from
+  // one camera angle — a manually-aimed pose has none of the natural
+  // micro-motion a real mocap clip has.
+  //
+  // Real fix, pointed out directly: this app already has a real clip with
+  // a natural-looking one-arm-raised-near-the-chest pose — the same
+  // "laughing" clip Laughing reuses. Reuse ITS body pose here too (temporarily
+  // switching `currentAnimation`, exact same mechanism as triggerLaughingReaction
+  // below it), and layer ONLY a finger-curl override on top — index/ring/
+  // pinky curl into a fist, middle stays extended, thumb tucks across.
+  // Applied to BOTH hands (cheap, and this clip's raised hand isn't the same
+  // bone across genders' worth double-checking) — whichever hand the clip
+  // actually lifts into view shows the gesture; the other stays low and out
+  // of frame either way.
+  //
+  // Curl axis/angle numbers are local axis-angle deltas relative to each
+  // bone's own rest quaternion (captured at load) — proven correct already
+  // (this part of the original version worked from the first pass). Left
+  // side mirrors the right side's axis by negating Y and Z (verified against
+  // this rig's own L/R rest quaternions: mirrored bones differ by exactly
+  // that sign flip, X and W unchanged) — same angle either side.
+  var MF_CURL = [
+    ["HandIndex1", [1, 0, 0], 1.3], ["HandIndex2", [1, 0, 0], 1.3], ["HandIndex3", [1, 0, 0], 1.0],
+    ["HandRing1", [1, 0, 0], 1.3], ["HandRing2", [1, 0, 0], 1.3], ["HandRing3", [1, 0, 0], 1.0],
+    ["HandPinky1", [1, 0, 0], 1.3], ["HandPinky2", [1, 0, 0], 1.3], ["HandPinky3", [1, 0, 0], 1.0],
+    ["HandThumb1", [0, 0, 1], 0.8], ["HandThumb2", [0, 0, 1], 0.6]
+  ];
+
+  function findBone(entry, name) {
+    return entry.skeleton.bones.find(function (b) { return b.name === name; });
+  }
+
+  function computeMiddleFingerTargets(gender) {
+    var entry = cache[gender];
+    var targets = {};
+    ["Left", "Right"].forEach(function (side) {
+      var mirror = side === "Left";
+      MF_CURL.forEach(function (c) {
+        var boneName = side + c[0];
+        var bone = findBone(entry, boneName);
+        var rest = entry.restQuaternions[boneName];
+        if (!bone || !rest) return;
+        var axis = c[1].slice();
+        if (mirror) { axis[1] = -axis[1]; axis[2] = -axis[2]; }
+        var delta = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(axis[0], axis[1], axis[2]).normalize(), c[2]);
+        targets[boneName] = rest.clone().multiply(delta);
+      });
+    });
+    entry.middleFingerTargets = targets;
+  }
+
+  function applyMiddleFingerFingers(gender, amount) {
+    var entry = cache[gender];
+    if (!entry || !entry.middleFingerTargets) return;
+    Object.keys(entry.middleFingerTargets).forEach(function (name) {
+      var bone = findBone(entry, name);
+      if (!bone) return;
+      bone.quaternion.slerp(entry.middleFingerTargets[name], amount);
+    });
+  }
+
+  // Trigger: reuses the real "laughing" clip as the body pose (temporarily
+  // switching `currentAnimation` and back — identical mechanism to
+  // triggerLaughingReaction, see its own comment for why a plain
+  // applyAnimation() call alone isn't enough), with the finger curl above
+  // layered on top for the reaction's duration instead of a face reshape.
+  var mfAnim = null; // {start, gender, previousAnimation} while playing; null when idle
+  var MF_IN_MS = 250, MF_HOLD_MS = 1600, MF_OUT_MS = 400;
+  function triggerMiddleFingerReaction() {
+    if (mfAnim) return; // already playing — ignore a re-click mid-reaction
+    var gender = currentGender;
+    var previousAnimation = currentAnimation;
+    currentAnimation = "laughing";
+    applyAnimation(gender, "laughing");
+    mfAnim = { start: performance.now(), gender: gender, previousAnimation: previousAnimation };
+  }
+  function updateMiddleFinger() {
+    if (!mfAnim) return;
+    var elapsed = performance.now() - mfAnim.start;
+    var gender = mfAnim.gender;
+    var amount;
+    if (elapsed < MF_IN_MS) {
+      amount = elapsed / MF_IN_MS;
+    } else if (elapsed < MF_IN_MS + MF_HOLD_MS) {
+      amount = 1;
+    } else if (elapsed < MF_IN_MS + MF_HOLD_MS + MF_OUT_MS) {
+      amount = 1 - (elapsed - MF_IN_MS - MF_HOLD_MS) / MF_OUT_MS;
+    } else {
+      amount = 0;
+      var previousAnimation = mfAnim.previousAnimation;
+      mfAnim = null;
+      currentAnimation = previousAnimation;
+      applyAnimation(gender, previousAnimation);
+    }
+    applyMiddleFingerFingers(gender, amount);
+  }
+  document.getElementById("btn-middle-finger").addEventListener("click", triggerMiddleFingerReaction);
+
   // ---------- render loop ----------
   var clock = new THREE.Clock();
   function animate() {
@@ -2193,6 +2601,8 @@
     var entry = cache[currentGender];
     if (entry && entry.mixer) entry.mixer.update(delta);
     updateAnger();
+    updateLaugh();
+    updateMiddleFinger();
     updateSmoke(delta);
     if (autoRotate && !dragging) {
       theta += 0.004;
