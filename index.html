@@ -144,6 +144,54 @@
     cursor: pointer;
   }
   .photo-btn:hover { border-color: rgba(255,255,255,0.3); }
+  .reactions-row .reaction-item {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .reactions-row .photo-btn { width: 100%; }
+  .fav-star {
+    width: 100%;
+    padding: 3px 0;
+    border-radius: 6px;
+    border: 1px solid rgba(255,255,255,0.12);
+    background: transparent;
+    color: #777;
+    font-size: 11px;
+    cursor: pointer;
+  }
+  .fav-star.active {
+    color: #ffd54a;
+    border-color: rgba(255, 213, 74, 0.4);
+    background: rgba(255, 213, 74, 0.08);
+  }
+  /* Floating over the 3D view, not inside the settings panel — this is the
+     part meant to simulate what actually shows up at the table mid-game
+     (see the "pick 3-4 favorites" request), so it needs to stay visible
+     and reachable even while the settings panel itself is collapsed
+     (mobile) or the user is just looking at the character. Bottom-LEFT,
+     deliberately not bottom-center or bottom-right: center would crowd
+     against the mobile panel-toggle button as more reactions get pinned,
+     and the desktop panel already owns the top-left, so bottom-left is the
+     one corner that's clear in both layouts. */
+  #quick-reactions {
+    position: fixed;
+    left: 16px; bottom: 16px;
+    z-index: 15;
+    display: flex;
+    gap: 10px;
+  }
+  #quick-reactions button {
+    width: 52px; height: 52px;
+    border-radius: 50%;
+    border: 1px solid rgba(255,255,255,0.15);
+    background: rgba(24, 26, 32, 0.88);
+    font-size: 24px;
+    line-height: 1;
+    cursor: pointer;
+    box-shadow: 0 6px 18px rgba(0,0,0,0.35);
+  }
   #selfie-video, #photo-preview {
     display: none;
     width: 100%;
@@ -246,6 +294,7 @@
 <div id="viewport"></div>
 <div id="loading">Loading character…</div>
 <button id="panel-toggle" aria-label="Toggle character settings">☰</button>
+<div id="quick-reactions"></div>
 
 <div id="panel">
   <div id="panel-drag-handle"></div>
@@ -310,10 +359,20 @@
   </div>
 
   <div class="row"><span>Reactions</span></div>
-  <div class="photo-row">
-    <button class="photo-btn" id="btn-angry">😠 Angry</button>
-    <button class="photo-btn" id="btn-laughing">😂 Laughing</button>
-    <button class="photo-btn" id="btn-middle-finger">🖕 Flip off</button>
+  <div class="hint" style="margin: -2px 0 6px;">Tap a button to preview it. Star up to 4 to pin them to the quick-access bar over the character — that bar is what you'd actually use mid-game.</div>
+  <div class="photo-row reactions-row">
+    <div class="reaction-item">
+      <button class="photo-btn" id="btn-angry">😠 Angry</button>
+      <button class="fav-star" data-reaction="angry" aria-label="Pin Angry to quick bar">☆</button>
+    </div>
+    <div class="reaction-item">
+      <button class="photo-btn" id="btn-laughing">😂 Laughing</button>
+      <button class="fav-star" data-reaction="laughing" aria-label="Pin Laughing to quick bar">☆</button>
+    </div>
+    <div class="reaction-item">
+      <button class="photo-btn" id="btn-middle-finger">🖕 Flip off</button>
+      <button class="fav-star" data-reaction="flipoff" aria-label="Pin Flip off to quick bar">☆</button>
+    </div>
   </div>
 
   <div class="divider"></div>
@@ -2131,7 +2190,32 @@
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ imageDataUrl: currentPhotoDataUrl })
     }).then(function (res) {
-      return res.json().then(function (body) { return { ok: res.ok, body: body }; });
+      // Parse as text FIRST, not straight to res.json() — a response that
+      // isn't actually JSON (this server's own error responses always are,
+      // but something ELSE answering at this URL/port — a different local
+      // server, a proxy, a stale browser tab pointed at a URL this app
+      // isn't actually running at — won't be) used to surface as a bare,
+      // undiagnosable "Unexpected token... is not valid JSON". Reported
+      // directly, more than once, and never reproducible against this
+      // server itself (its own 404 body is literally the text "not found",
+      // nothing that could produce that error) — so the fix isn't a guess
+      // at the cause, it's making the NEXT occurrence self-diagnosing
+      // instead of a dead end.
+      return res.text().then(function (text) {
+        var body;
+        try {
+          body = JSON.parse(text);
+        } catch {
+          throw new Error(
+            "Server at " + window.location.origin + " didn't return JSON (got: \"" +
+            text.slice(0, 80) + (text.length > 80 ? "…" : "") + "\"). " +
+            "This usually means you're not actually talking to this app's own server — " +
+            "check the terminal running `node serve.mjs` for the exact URL it printed and use that, " +
+            "not a different port, an old tab, or a hosted copy without the API route."
+          );
+        }
+        return { ok: res.ok, body: body };
+      });
     }).then(function (r) {
       btnAnalyze.disabled = false;
       if (!r.ok) { setPhotoStatus(r.body.error || "Analysis failed.", true); return; }
@@ -2592,6 +2676,81 @@
     applyMiddleFingerFingers(gender, amount);
   }
   document.getElementById("btn-middle-finger").addEventListener("click", triggerMiddleFingerReaction);
+
+  // ---------- Favorite reactions: pick a few, quick-access bar over the character ----------
+  // Directly requested: pick 3-4 reactions "to bring to the table" instead
+  // of every reaction always being on screen — this app only has 3 today,
+  // but the mechanism is built for however many get added later (each new
+  // reaction just needs its own entry in this list, nothing else changes).
+  var REACTIONS = [
+    { id: "angry", emoji: "😠", label: "Angry", trigger: function () { triggerAngryReaction(); } },
+    { id: "laughing", emoji: "😂", label: "Laughing", trigger: function () { triggerLaughingReaction(); } },
+    { id: "flipoff", emoji: "🖕", label: "Flip off", trigger: function () { triggerMiddleFingerReaction(); } }
+  ];
+  var MAX_FAVORITE_REACTIONS = 4;
+
+  // localStorage, not a server call — this is a per-device UI preference,
+  // same category of thing as "which tab was open last", not game state.
+  function loadFavoriteReactions() {
+    try {
+      var raw = localStorage.getItem("favoriteReactions");
+      var parsed = raw ? JSON.parse(raw) : [];
+      if (!Array.isArray(parsed)) return [];
+      // Drop anything that isn't a real reaction id anymore — a saved
+      // favorite from a build where a reaction got renamed/removed
+      // shouldn't silently produce a dead button.
+      return parsed.filter(function (id) { return REACTIONS.some(function (r) { return r.id === id; }); });
+    } catch (e) {
+      return []; // private-browsing / storage blocked — just start with none favorited, don't break the page
+    }
+  }
+  function saveFavoriteReactions() {
+    try { localStorage.setItem("favoriteReactions", JSON.stringify(favoriteReactions)); } catch (e) { /* storage blocked — favorites just won't persist across reloads, not fatal */ }
+  }
+  var favoriteReactions = loadFavoriteReactions();
+
+  function renderQuickReactions() {
+    var dock = document.getElementById("quick-reactions");
+    dock.innerHTML = "";
+    favoriteReactions.forEach(function (id) {
+      var r = REACTIONS.filter(function (x) { return x.id === id; })[0];
+      if (!r) return;
+      var btn = document.createElement("button");
+      btn.textContent = r.emoji;
+      btn.title = r.label;
+      btn.setAttribute("aria-label", r.label);
+      btn.addEventListener("click", r.trigger);
+      dock.appendChild(btn);
+    });
+  }
+  function renderFavoriteStars() {
+    REACTIONS.forEach(function (r) {
+      var star = document.querySelector('.fav-star[data-reaction="' + r.id + '"]');
+      if (!star) return;
+      var isFav = favoriteReactions.indexOf(r.id) !== -1;
+      star.classList.toggle("active", isFav);
+      star.textContent = isFav ? "★ pinned" : "☆ pin";
+    });
+  }
+  Array.prototype.forEach.call(document.querySelectorAll(".fav-star"), function (star) {
+    star.addEventListener("click", function (e) {
+      e.stopPropagation(); // the star sits next to the reaction's own preview button — don't also trigger a preview on every pin/unpin tap
+      var id = star.getAttribute("data-reaction");
+      var idx = favoriteReactions.indexOf(id);
+      if (idx !== -1) {
+        favoriteReactions.splice(idx, 1);
+      } else if (favoriteReactions.length < MAX_FAVORITE_REACTIONS) {
+        favoriteReactions.push(id);
+      } else {
+        return; // already at the cap and this one isn't pinned — no-op rather than bumping something the user didn't ask to remove
+      }
+      saveFavoriteReactions();
+      renderFavoriteStars();
+      renderQuickReactions();
+    });
+  });
+  renderFavoriteStars();
+  renderQuickReactions();
 
   // ---------- render loop ----------
   var clock = new THREE.Clock();

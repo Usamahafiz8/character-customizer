@@ -15,9 +15,17 @@ Opening `index.html` directly (`file://`) will show a blank canvas — browsers 
 node serve.mjs
 ```
 
-Then open http://localhost:8099
+Then open the URL it prints (`https://localhost:8099` — see `serve.mjs` for why this runs HTTPS with a self-signed cert even locally: camera access needs a secure context).
 
 To also enable **Match a Photo** (selfie/upload → AI-configured character), copy `.env.local.example` to `.env.local` and put a real OpenAI API key in it, then restart `node serve.mjs`. Every other feature works with no key at all.
+
+## Deploying (e.g. Vercel)
+
+The static parts of this app (index.html + models) deploy to any static host as-is. **Match a Photo needs its own backend, though** — `serve.mjs` only runs when someone runs it locally; it isn't there on a static deployment. `api/analyze-photo.mjs` is a Vercel serverless function that fills that gap for a Vercel deployment specifically — it shares the exact same prompt/OpenAI-call/sanitize logic as `serve.mjs` (both import `lib/analyzePhotoCore.mjs`, so there's one copy of that logic, not two that can drift apart).
+
+To enable it on Vercel: add `OPENAI_API_KEY` under the project's **Settings → Environment Variables** (not a committed file — Vercel injects it into the function at runtime), then redeploy. Without it, "Analyze & apply" responds with a clear "no key configured" message instead of failing silently.
+
+(This is the fix for a real bug: the deployed site at one point had no `api/` function at all, so every "Analyze & apply" click hit Vercel's own platform 404 page instead of a response — index.html's `fetch()` then failed trying to parse that 404 page's HTML as JSON, surfacing as a cryptic `Unexpected token 'T', "The page c"... is not valid JSON`.)
 
 ## What's customizable
 
